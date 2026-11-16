@@ -76,7 +76,7 @@ class User extends Authenticatable
 
     public function collectes()
     {
-        return $this->hasMany(Collecte::class);
+        return $this->hasMany(Collecte::class, 'menage_id');
     }
 
     public function garanty()
@@ -86,7 +86,7 @@ class User extends Authenticatable
 
     public function affectations()
     {
-        return $this->hasMany(CollecteAffectation::class);
+        return $this->hasMany(CollecteAffectation::class, 'ramasseur_id');
     }
 
     public function notifications()

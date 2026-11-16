@@ -10,7 +10,7 @@ class RamasseurController extends Controller
     public function profil(Request $request)
     {
         abort_unless($request->user()->isRamasseur(), 403);
-        return response()->json($request->user()->load('ramasseur.zone'));
+        return response()->json($request->user());
     }
 
     public function disponibilite(Request $request)
@@ -23,7 +23,7 @@ class RamasseurController extends Controller
             'precision_position' => ['nullable', 'numeric', 'min:0']
         ]);
 
-        $ramasseur = $request->user()->ramasseur;
+        $ramasseur = $request->user();
 
         $ramasseur->update([
             'disponible' => $data['disponible'],
@@ -48,7 +48,7 @@ class RamasseurController extends Controller
             'precision_position' => ['nullable', 'numeric', 'min:0'],
             'collecte_id' => ['nullable', 'exists:collectes,id']
         ]);
-        $ramasseur = $request->user()->ramasseur;
+        $ramasseur = $request->user();
         $ramasseur->update([...collect($data)->only([
             'latitude',
             'longitude',

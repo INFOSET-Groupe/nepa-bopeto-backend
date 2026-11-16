@@ -28,7 +28,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/menage/collectes', [CollecteController::class, 'index']);
 
     Route::get('/ramasseur/garanty', [GarantyController::class, 'index']);
-    Route::get('/ramasseur/garanty/pay', [GarantyController::class, 'initiate']);
+    Route::post('/ramasseur/garanty/pay', [GarantyController::class, 'initiate']);
+    Route::post('/ramasseur/garanty/callback', [GarantyController::class, 'callback'])->name('api.garanty.callback');
+    Route::get('/ramasseur/garanty/check', [GarantyController::class, 'check'])->name('api.garanty.check');
     Route::get('/ramasseur/profil', [RamasseurController::class, 'profil']);
     Route::post('/ramasseur/disponibilite', [RamasseurController::class, 'disponibilite']);
     Route::post('/ramasseur/position', [RamasseurController::class, 'position']);

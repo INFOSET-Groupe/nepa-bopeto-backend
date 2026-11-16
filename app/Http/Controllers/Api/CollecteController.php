@@ -5,9 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Collecte;
 use App\Models\CollecteAffectation;
-use App\Models\Ramasseur;
-use App\Models\UserNotification;
 use App\Models\User;
+use App\Models\UserNotification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -27,10 +26,10 @@ class CollecteController extends Controller
             'dechets.*.unite' => ['required', 'string', 'max:20']
         ]);
         $collecte = DB::transaction(function () use ($request, $data) {
-            $menage = $request->user()->menage;
+            $user = $request->user();
             $collecte = Collecte::create([
                 'reference' => 'TEMP-' . uniqid(),
-                'menage_id' => $menage->id,
+                'menage_id' => $user->id,
                 'taille_poubelle_id' => $data['taille_poubelle_id'],
                 'adresse' => $data['adresse'],
                 'latitude' => $data['latitude'],
@@ -43,7 +42,7 @@ class CollecteController extends Controller
 
             $collecte->typesDechets()->attach(collect($data['dechets'])->mapWithKeys(fn($dechet) => [$dechet['type_dechet_id'] => ['quantite' => $dechet['quantite'], 'unite' => $dechet['unite']]])->all());
 
-            $ramasseurs = User::where('disponible', true)->whereNotNull('latitude')->whereNotNull('longitude')->get()->filter(fn($ramasseur) => $this->distance($data['latitude'], $data['longitude'], $ramasseur->latitude, $ramasseur->longitude) <= (float) config('app.collecte_radius_km', 10));
+            $ramasseurs = User::where('role', 'ramasseur')->where('disponible', true)->whereNotNull('latitude')->whereNotNull('longitude')->get()->filter(fn($ramasseur) => $this->distance($data['latitude'], $data['longitude'], $ramasseur->latitude, $ramasseur->longitude) <= (float) config('app.collecte_radius_km', 10));
             foreach ($ramasseurs as $ramasseur) {
                 CollecteAffectation::create(['collecte_id' => $collecte->id, 'ramasseur_id' => $ramasseur->id, 'statut' => 'en_attente', 'notifie_at' => now()]);
                 UserNotification::create(['user_id' => $ramasseur->id, 'type' => 'nouvelle_collecte', 'titre' => 'Nouvelle demande de collecte', 'message' => 'Une collecte est disponible près de vous.', 'donnees' => ['collecte_id' => $collecte->id]]);
@@ -58,7 +57,7 @@ class CollecteController extends Controller
     public function index(Request $request)
     {
         abort_unless($request->user()->isMenage(), 403);
-        $query = $request->user()->menage->collectes()->with(['taillePoubelle', 'ramasseur.user']);
+        $query = $request->user()->collectes()->with(['taillePoubelle', 'ramasseur']);
         if ($request->filled('statut')) {
             $query->where('statut', $request->string('statut'));
         }
@@ -68,7 +67,7 @@ class CollecteController extends Controller
     public function disponibles(Request $request)
     {
         abort_unless($request->user()->isRamasseur(), 403);
-        $ramasseur = $request->user()->ramasseur;
+        $ramasseur = $request->user();
         return response()->json($ramasseur->affectations()->where('statut', 'en_attente')->with('collecte')->get()->pluck('collecte')->filter(fn($collecte) => $collecte->statut === 'disponible')->values());
     }
 
@@ -79,25 +78,25 @@ class CollecteController extends Controller
             'longitude' => ['required', 'numeric', 'between:-180,180']
         ]);
 
-        $ramasseurs = User::where('disponible', true)->whereNotNull('latitude')->whereNotNull('longitude')->get()
+        $ramasseurs = User::where('role', 'ramasseur')->where('disponible', true)->whereNotNull('latitude')->whereNotNull('longitude')->get()
             ->map(function ($ramasseur) use ($data) {
                 $ramasseur->distance = round($this->distance($data['latitude'], $data['longitude'], $ramasseur->latitude, $ramasseur->longitude), 2);
                 return $ramasseur;
             })->filter(fn($ramasseur) => $ramasseur->distance <= (float) config('app.collecte_radius_km', 10))->values();
 
-        return response()->json(['ramasseurs' => $ramasseurs->map(fn($ramasseur) => ['id' => $ramasseur->id, 'prenom' => $ramasseur->user->prenom, 'latitude' => $ramasseur->latitude, 'longitude' => $ramasseur->longitude, 'distance' => $ramasseur->distance])]);
+        return response()->json(['ramasseurs' => $ramasseurs->map(fn($ramasseur) => ['id' => $ramasseur->id, 'prenom' => $ramasseur->nom, 'latitude' => $ramasseur->latitude, 'longitude' => $ramasseur->longitude, 'distance' => $ramasseur->distance])]);
     }
 
     public function show(Request $request, Collecte $collecte)
     {
         abort_unless($this->canSee($request, $collecte), 403);
-        return response()->json($collecte->load(['menage.user', 'ramasseur.user', 'taillePoubelle', 'typesDechets', 'affectations']));
+        return response()->json($collecte->load(['menage', 'ramasseur', 'taillePoubelle', 'typesDechets', 'affectations.ramasseur']));
     }
 
     public function accepter(Request $request, Collecte $collecte)
     {
         abort_unless($request->user()->isRamasseur(), 403);
-        $ramasseur = $request->user()->ramasseur;
+        $ramasseur = $request->user();
         DB::transaction(function () use ($collecte, $ramasseur) {
             $collecte = Collecte::whereKey($collecte->id)->lockForUpdate()->firstOrFail();
             abort_unless($collecte->statut === 'disponible', 409, 'Cette demande a déjà été prise en charge.');
@@ -106,7 +105,7 @@ class CollecteController extends Controller
             $collecte->update(['ramasseur_id' => $ramasseur->id, 'statut' => 'acceptee', 'acceptee_at' => now()]);
             $affectation->update(['statut' => 'acceptee', 'repondu_at' => now()]);
             $collecte->affectations()->where('id', '!=', $affectation->id)->where('statut', 'en_attente')->update(['statut' => 'expiree', 'repondu_at' => now()]);
-            UserNotification::create(['user_id' => $collecte->menage->user_id, 'type' => 'collecte_acceptee', 'titre' => 'Demande acceptée', 'message' => 'Votre demande a été acceptée.', 'donnees' => ['collecte_id' => $collecte->id]]);
+            UserNotification::create(['user_id' => $collecte->menage_id, 'type' => 'collecte_acceptee', 'titre' => 'Demande acceptée', 'message' => 'Votre demande a été acceptée.', 'donnees' => ['collecte_id' => $collecte->id]]);
         });
         return $this->show($request, $collecte->fresh());
     }
@@ -114,14 +113,14 @@ class CollecteController extends Controller
     public function refuser(Request $request, Collecte $collecte)
     {
         abort_unless($request->user()->isRamasseur(), 403);
-        $affectation = $collecte->affectations()->where('ramasseur_id', $request->user()->ramasseur->id)->where('statut', 'en_attente')->firstOrFail();
+        $affectation = $collecte->affectations()->where('ramasseur_id', $request->user()->id)->where('statut', 'en_attente')->firstOrFail();
         $affectation->update(['statut' => 'refusee', 'repondu_at' => now()]);
         return response()->json(['message' => 'Demande refusée.']);
     }
 
     public function transition(Request $request, Collecte $collecte, string $statut)
     {
-        abort_unless($request->user()->isRamasseur() && $collecte->ramasseur_id === $request->user()->ramasseur->id, 403);
+        abort_unless($request->user()->isRamasseur() && $collecte->ramasseur_id === $request->user()->id, 403);
         $statut = ['en-route' => 'en_route', 'arrive' => 'arrive', 'demarrer' => 'en_collecte', 'terminer' => 'terminee'][$statut] ?? $statut;
         $transitions = ['en_route' => ['acceptee', 'en_route_at'], 'arrive' => ['en_route', 'arrivee_at'], 'en_collecte' => ['arrive', 'collecte_at'], 'terminee' => ['en_collecte', 'terminee_at']];
         abort_unless(isset($transitions[$statut]) && $collecte->statut === $transitions[$statut][0], 409, 'Transition de statut invalide.');
@@ -142,7 +141,7 @@ class CollecteController extends Controller
     private function canSee(Request $request, Collecte $collecte): bool
     {
         $user = $request->user();
-        return ($user->isMenage() && $collecte->menage?->user_id === $user->id) || ($user->isRamasseur() && $collecte->ramasseur?->user_id === $user->id);
+        return ($user->isMenage() && $collecte->menage_id === $user->id) || ($user->isRamasseur() && $collecte->ramasseur_id === $user->id);
     }
 
     private function distance(float $latitudeA, float $longitudeA, float $latitudeB, float $longitudeB): float

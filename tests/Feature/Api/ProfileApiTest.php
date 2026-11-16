@@ -3,12 +3,16 @@
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 
 test('un utilisateur peut mettre à jour son avatar avec une image base64', function () {
     Storage::fake('public');
     $user = User::factory()->create();
+    $oldAvatarPath = 'avatars/' . Str::uuid() . '.jpg';
+    Storage::disk('public')->put($oldAvatarPath, 'old avatar');
+    $user->update(['avatar' => Storage::disk('public')->url($oldAvatarPath)]);
 
     $response = $this->actingAs($user, 'sanctum')->putJson('/api/menage/profil', [
         'avatar' => 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j+ioAAAAASUVORK5CYII=',
@@ -18,6 +22,7 @@ test('un utilisateur peut mettre à jour son avatar avec une image base64', func
     $avatarUrl = $response->json('avatar');
     expect($avatarUrl)->toStartWith('http://localhost/storage/avatars/');
     Storage::disk('public')->assertExists(str_replace('http://localhost/storage/', '', $avatarUrl));
+    Storage::disk('public')->assertMissing($oldAvatarPath);
     expect($user->fresh()->avatar)->toBe($avatarUrl);
 });
 

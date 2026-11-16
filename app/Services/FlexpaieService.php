@@ -17,6 +17,7 @@ class FlexpaieService
         $amount,
         $phone,
         $currency,
+        $description,
         $callbackUrl
     ): array {
         $response = Http::withHeaders([
@@ -26,7 +27,7 @@ class FlexpaieService
             'merchant' => 'ORACLEZAPP',
             'type' => '1',
             'reference' => $reference,
-            'description' => "Test de paiement mobile pour l'application Nepa Bopeto",
+            'description' => $description,
             'phone' => $phone,
             'amount' => $amount,
             'currency' => $currency,

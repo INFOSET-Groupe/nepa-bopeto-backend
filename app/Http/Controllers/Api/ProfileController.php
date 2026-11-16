@@ -14,7 +14,7 @@ class ProfileController extends Controller
     public function show(Request $request)
     {
         $user = $request->user();
-        return response()->json($user->load(['menage', 'ramasseur', 'superviseur']));
+        return response()->json($user);
     }
 
     public function update(Request $request)
@@ -29,7 +29,9 @@ class ProfileController extends Controller
             'longitude' => ['sometimes', 'numeric', 'between:-180,180']
         ]);
 
+        $oldAvatarPath = null;
         if (isset($data['avatar'])) {
+            $oldAvatarPath = $this->storedAvatarPath($user->avatar);
             $avatar = $data['avatar'];
             if (preg_match('#\Adata:image/[a-zA-Z0-9.+-]+;base64,#', $avatar, $matches)) {
                 $avatar = substr($avatar, strlen($matches[0]));
@@ -58,11 +60,31 @@ class ProfileController extends Controller
             $data['avatar'] = Storage::disk('public')->url($path);
         }
 
-        $user->update(collect($data)->only(['nom', 'phone', 'email', 'avatar'])->all());
-        if ($user->menage) {
-            $user->menage->update(collect($data)->only(['adresse', 'latitude', 'longitude'])->all());
+        $user->update(collect($data)->only(['nom', 'phone', 'email', 'avatar', 'adresse', 'latitude', 'longitude'])->all());
+
+        if ($oldAvatarPath !== null && ! Storage::disk('public')->delete($oldAvatarPath)) {
+            throw new RuntimeException('Impossible de supprimer l’ancien avatar.');
         }
 
         return $this->show($request);
+    }
+
+    private function storedAvatarPath(?string $avatarUrl): ?string
+    {
+        if ($avatarUrl === null) {
+            return null;
+        }
+
+        $avatarPrefix = rtrim(Storage::disk('public')->url('avatars'), '/') . '/';
+        if (! str_starts_with($avatarUrl, $avatarPrefix)) {
+            return null;
+        }
+
+        $filename = substr($avatarUrl, strlen($avatarPrefix));
+        if (! preg_match('/\A[0-9a-f-]{36}\.(?:jpg|png|gif|webp)\z/i', $filename)) {
+            return null;
+        }
+
+        return 'avatars/' . $filename;
     }
 }

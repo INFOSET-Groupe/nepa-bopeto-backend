@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class CollecteAffectation extends Model
 {
-    protected $fillable = ['collecte_id', 'user_id', 'statut', 'notifie_at', 'repondu_at'];
+    protected $fillable = ['collecte_id', 'ramasseur_id', 'statut', 'notifie_at', 'repondu_at'];
 
     protected function casts(): array
     {
@@ -18,8 +18,8 @@ class CollecteAffectation extends Model
         return $this->belongsTo(Collecte::class);
     }
 
-    public function user()
+    public function ramasseur()
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(User::class, 'ramasseur_id');
     }
 }

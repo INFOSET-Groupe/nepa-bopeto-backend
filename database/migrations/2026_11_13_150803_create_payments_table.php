@@ -24,6 +24,7 @@ return new class extends Migration
             $table->enum('status', [
                 'pending',
                 'success',
+                'cancelled',
                 'failed'
             ])->nullable();
 

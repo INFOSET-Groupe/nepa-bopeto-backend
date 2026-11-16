@@ -9,10 +9,16 @@ class Payment extends Model
     protected $fillable = [
         'user_id',
         'garanty_id',
+        'collecte_id',
         'type',
+        'phone',
         'montant',
         'currency',
         'status',
+        'phone',
+        'reference',
+        'order_number',
+        'description',
     ];
 
     public function user()
