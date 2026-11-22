@@ -64,6 +64,7 @@ class AuthController extends Controller
                 'nom' => $user->nom,
                 'phone' => $user->phone,
                 'avatar' => $user->avatar,
+                'shortcode' => $user->flexpaie_code,
                 'role' => $user->role,
                 'statut' => $user->statut,
                 'last_seen_at' => $user->last_seen_at,

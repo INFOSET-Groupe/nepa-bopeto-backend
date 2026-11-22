@@ -23,8 +23,8 @@ class GarantyController extends Controller
             ->get();
 
         return [
-            'garanty' => $garanty->montant,
-            'disponible' => $garanty->reste,
+            'garanty' => $garanty->montant ?? 0,
+            'disponible' => $garanty->reste ?? 0,
             'liste_payment' => $last_payment,
         ];
     }

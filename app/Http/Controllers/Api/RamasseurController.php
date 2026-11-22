@@ -36,7 +36,17 @@ class RamasseurController extends Controller
         ]);
 
 
-        return response()->json($ramasseur->fresh());
+        //$ramasseur->fresh()
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Disponibilité mise à jour avec succès',
+            'data' => [
+                'disponible' => $ramasseur->disponible,
+                'latitude' => $ramasseur->latitude,
+                'longitude' => $ramasseur->longitude,
+                'precision_position' => $ramasseur->precision_position
+            ]
+        ]);
     }
 
     public function position(Request $request)

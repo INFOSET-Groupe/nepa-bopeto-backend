@@ -25,7 +25,7 @@ class User extends Authenticatable
         'role',
         'adresse',
         'disponible',
-        'flexpaie_code',
+        '   ',
         'latitude',
         'longitude',
         'statut',

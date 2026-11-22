@@ -25,6 +25,7 @@ class CollecteController extends Controller
             'dechets.*.quantite' => ['required', 'numeric', 'min:0.01'],
             'dechets.*.unite' => ['required', 'string', 'max:20']
         ]);
+
         $collecte = DB::transaction(function () use ($request, $data) {
             $user = $request->user();
             $collecte = Collecte::create([
