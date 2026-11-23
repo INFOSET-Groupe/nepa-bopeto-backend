@@ -32,6 +32,8 @@ class CollecteController extends Controller
             'adresse' => ['required', 'string'],
             'latitude' => ['required', 'numeric', 'between:-90,90'],
             'longitude' => ['required', 'numeric', 'between:-180,180'],
+            'dechets_tries' => ['nullable', 'boolean'],
+            'mode_paiement' => ['nullable', 'string'],
             'planning_at' => ['nullable', 'date', 'after_or_equal:now'],
             'instructions' => ['nullable', 'string'],
         ]);
