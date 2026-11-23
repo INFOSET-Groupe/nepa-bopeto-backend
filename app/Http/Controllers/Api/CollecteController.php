@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Collecte;
 use App\Models\CollecteAffectation;
+use App\Models\TaillePoubelle;
 use App\Models\User;
 use App\Models\UserNotification;
 use Illuminate\Http\Request;
@@ -12,18 +13,27 @@ use Illuminate\Support\Facades\DB;
 
 class CollecteController extends Controller
 {
+
+    public function options()
+    {
+        $taillesPoubelles = TaillePoubelle::all();
+
+        return response()->json($taillesPoubelles);
+    }
+
     public function store(Request $request)
     {
-        abort_unless($request->user()->isMenage(), 403);
+        //abort_unless($request->user()->isMenage(), 403);
         $data = $request->validate([
-            'taille_poubelle_id' => ['required', 'exists:tailles_poubelles,id'],
+            'tailles_poubelles' => ['required', 'array', 'min:1'],
+            'tailles_poubelles.*.taille_poubelle_id' => ['required', 'integer', 'distinct', 'exists:tailles_poubelles,id'],
+            'tailles_poubelles.*.qte' => ['required', 'integer', 'min:1'],
+            'tailles_poubelles.*.type_dechet' => ['required', 'in:compostable,recyclable,residuel'],
             'adresse' => ['required', 'string'],
             'latitude' => ['required', 'numeric', 'between:-90,90'],
             'longitude' => ['required', 'numeric', 'between:-180,180'],
-            'dechets' => ['required', 'array', 'min:1'],
-            'dechets.*.type_dechet_id' => ['required', 'exists:type_dechets,id'],
-            'dechets.*.quantite' => ['required', 'numeric', 'min:0.01'],
-            'dechets.*.unite' => ['required', 'string', 'max:20']
+            'planning_at' => ['nullable', 'date', 'after_or_equal:now'],
+            'instructions' => ['nullable', 'string'],
         ]);
 
         $collecte = DB::transaction(function () use ($request, $data) {
@@ -31,7 +41,6 @@ class CollecteController extends Controller
             $collecte = Collecte::create([
                 'reference' => 'TEMP-' . uniqid(),
                 'menage_id' => $user->id,
-                'taille_poubelle_id' => $data['taille_poubelle_id'],
                 'adresse' => $data['adresse'],
                 'latitude' => $data['latitude'],
                 'longitude' => $data['longitude'],
@@ -39,9 +48,11 @@ class CollecteController extends Controller
                 'demande_at' => now()
             ]);
 
-            $collecte->update(['reference' => 'COL-' . now()->format('Y') . '-' . str_pad((string) $collecte->id, 6, '0', STR_PAD_LEFT)]);
+            foreach ($data['tailles_poubelles'] as $taille) {
+                $collecte->taillesPoubelles()->attach($taille['taille_poubelle_id'], ['qte' => $taille['qte'], 'type_dechet' => $taille['type_dechet']]);
+            }
 
-            $collecte->typesDechets()->attach(collect($data['dechets'])->mapWithKeys(fn($dechet) => [$dechet['type_dechet_id'] => ['quantite' => $dechet['quantite'], 'unite' => $dechet['unite']]])->all());
+            $collecte->update(['reference' => 'COL-' . now()->format('Y') . '-' . str_pad((string) $collecte->id, 6, '0', STR_PAD_LEFT)]);
 
             $ramasseurs = User::where('role', 'ramasseur')->where('disponible', true)->whereNotNull('latitude')->whereNotNull('longitude')->get()->filter(fn($ramasseur) => $this->distance($data['latitude'], $data['longitude'], $ramasseur->latitude, $ramasseur->longitude) <= (float) config('app.collecte_radius_km', 10));
             foreach ($ramasseurs as $ramasseur) {
@@ -52,13 +63,17 @@ class CollecteController extends Controller
             return $collecte;
         });
 
-        return response()->json($collecte->load(['taillePoubelle', 'typesDechets', 'affectations']), 201);
+        return response()->json([
+            "success" => true,
+            'message' => 'Demande de collecte créée avec succès.',
+            'collecte' => $collecte->load('taillesPoubelles')
+        ], 201);
     }
 
     public function index(Request $request)
     {
         abort_unless($request->user()->isMenage(), 403);
-        $query = $request->user()->collectes()->with(['taillePoubelle', 'ramasseur']);
+        $query = $request->user()->collectes()->with(['taillesPoubelles', 'ramasseur']);
         if ($request->filled('statut')) {
             $query->where('statut', $request->string('statut'));
         }
@@ -69,7 +84,7 @@ class CollecteController extends Controller
     {
         abort_unless($request->user()->isRamasseur(), 403);
         $ramasseur = $request->user();
-        return response()->json($ramasseur->affectations()->where('statut', 'en_attente')->with('collecte')->get()->pluck('collecte')->filter(fn($collecte) => $collecte->statut === 'disponible')->values());
+        return response()->json($ramasseur->affectations()->where('statut', 'en_attente')->with('collecte.taillesPoubelles')->get()->pluck('collecte')->filter(fn($collecte) => $collecte->statut === 'disponible')->values());
     }
 
     public function proches(Request $request)
@@ -91,7 +106,7 @@ class CollecteController extends Controller
     public function show(Request $request, Collecte $collecte)
     {
         abort_unless($this->canSee($request, $collecte), 403);
-        return response()->json($collecte->load(['menage', 'ramasseur', 'taillePoubelle', 'typesDechets', 'affectations.ramasseur']));
+        return response()->json($collecte->load(['menage', 'ramasseur', 'taillesPoubelles', 'affectations.ramasseur']));
     }
 
     public function accepter(Request $request, Collecte $collecte)

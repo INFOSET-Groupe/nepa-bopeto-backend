@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Collecte extends Model
 {
-    protected $fillable = ['reference', 'menage_id', 'ramasseur_id', 'taille_poubelle_id', 'adresse', 'latitude', 'longitude', 'statut', 'demande_at', 'acceptee_at', 'en_route_at', 'arrivee_at', 'collecte_at', 'terminee_at', 'annulee_at', 'motif_annulation'];
+    protected $fillable = ['reference', 'menage_id', 'ramasseur_id', 'type_dechet', 'adresse', 'latitude', 'longitude', 'statut', 'demande_at', 'acceptee_at', 'en_route_at', 'arrivee_at', 'collecte_at', 'terminee_at', 'annulee_at', 'motif_annulation'];
 
     protected function casts(): array
     {
@@ -23,14 +23,11 @@ class Collecte extends Model
         return $this->belongsTo(User::class, 'menage_id');
     }
 
-    public function taillePoubelle()
+    public function taillesPoubelles()
     {
-        return $this->belongsTo(TaillePoubelle::class);
-    }
-
-    public function typesDechets()
-    {
-        return $this->belongsToMany(TypeDechet::class, 'collecte_dechets')->withPivot(['quantite', 'unite'])->withTimestamps();
+        return $this->belongsToMany(TaillePoubelle::class, 'collecte_taille_poubelle')
+            ->withPivot(['qte', 'type_dechet'])
+            ->withTimestamps();
     }
 
     public function affectations()

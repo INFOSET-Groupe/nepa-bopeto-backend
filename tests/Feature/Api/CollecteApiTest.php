@@ -2,7 +2,6 @@
 
 use App\Models\Collecte;
 use App\Models\TaillePoubelle;
-use App\Models\TypeDechet;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -62,19 +61,25 @@ test('la première acceptation invalide les autres affectations', function () {
         'latitude' => 0,
         'longitude' => 0,
     ]);
-    TaillePoubelle::create(['nom' => 'Moyenne', 'capacite' => 60, 'unite' => 'L']);
-    TypeDechet::create(['nom' => 'Plastique', 'categorie' => 'recyclable']);
-
+    $tailleMoyenne = TaillePoubelle::create(['nom' => 'Moyenne', 'capacite' => 60, 'unite' => 'L']);
+    $tailleGrande = TaillePoubelle::create(['nom' => 'Grande', 'capacite' => 120, 'unite' => 'L']);
     $this->actingAs($menageUser, 'sanctum')->postJson('/api/collectes', [
-        'taille_poubelle_id' => 1,
+        'tailles_poubelles' => [
+            ['taille_poubelle_id' => $tailleMoyenne->id, 'qte' => 2],
+            ['taille_poubelle_id' => $tailleGrande->id, 'qte' => 1],
+        ],
+        'type_dechet' => 'compostable',
         'adresse' => 'Kinshasa',
         'latitude' => 0,
         'longitude' => 0,
-        'dechets' => [['type_dechet_id' => 1, 'quantite' => 2, 'unite' => 'sac']],
-    ])->assertCreated();
+    ])->assertCreated()
+        ->assertJsonPath('tailles_poubelles.0.pivot.qte', 2)
+        ->assertJsonPath('tailles_poubelles.1.pivot.qte', 1);
 
     $collecte = Collecte::first();
     expect($collecte->menage_id)->toBe($menageUser->id)
+        ->and($collecte->type_dechet)->toBe('compostable')
+        ->and($collecte->taillesPoubelles()->orderBy('tailles_poubelles.id')->pluck('collecte_taille_poubelle.qte')->all())->toBe([2, 1])
         ->and($collecte->affectations()->pluck('ramasseur_id')->all())->toEqualCanonicalizing([$ramasseurUser->id, $secondRamasseur->id]);
 
     $this->actingAs($ramasseurUser, 'sanctum')
@@ -96,4 +101,17 @@ test('la première acceptation invalide les autres affectations', function () {
     expect($collecte->fresh()->statut)->toBe('acceptee')
         ->and($collecte->fresh()->ramasseur_id)->toBe($ramasseurUser->id)
         ->and($collecte->affectations()->where('ramasseur_id', $secondRamasseur->id)->value('statut'))->toBe('expiree');
+});
+
+test('une collecte refuse une catégorie de déchet inconnue', function () {
+    $menageUser = User::factory()->create(['role' => 'menage']);
+    $taille = TaillePoubelle::create(['nom' => 'Moyenne', 'capacite' => 60, 'unite' => 'L']);
+
+    $this->actingAs($menageUser, 'sanctum')->postJson('/api/collectes', [
+        'tailles_poubelles' => [['taille_poubelle_id' => $taille->id, 'qte' => 1]],
+        'type_dechet' => 'compostable',
+        'adresse' => 'Kinshasa',
+        'latitude' => 0,
+        'longitude' => 0,
+    ])->assertUnprocessable()->assertJsonValidationErrors(['type_dechet']);
 });

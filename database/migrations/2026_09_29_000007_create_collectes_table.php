@@ -21,6 +21,10 @@ return new class extends Migration
                 'en_attente', 'disponible', 'acceptee', 'en_route', 'arrive',
                 'en_collecte', 'terminee', 'annulee', 'expiree',
             ])->default('en_attente')->index();
+            $table->boolean('dechets_tries')->default(false);
+            $table->string('mode_paiement')->nullable();
+            $table->string('instructions')->nullable();
+            $table->timestamp('planning_at')->nullable();
             $table->timestamp('demande_at')->nullable();
             $table->timestamp('acceptee_at')->nullable();
             $table->timestamp('en_route_at')->nullable();

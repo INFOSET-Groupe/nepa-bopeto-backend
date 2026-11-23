@@ -5,7 +5,6 @@ namespace Database\Seeders;
 use App\Models\Payment;
 use App\Models\User;
 use App\Models\TaillePoubelle;
-use App\Models\TypeDechet;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
@@ -21,7 +20,7 @@ class DatabaseSeeder extends Seeder
     {
         $menageUser = User::factory()->create([
             'nom' => 'Menage Test',
-            'username' => 'test1',
+            'username' => 'menage',
             'phone' => '243000000000',
             'role' => 'menage',
             'email' => 'menage@test.com',
@@ -33,7 +32,7 @@ class DatabaseSeeder extends Seeder
 
         $ramasseurUser = User::factory()->create([
             'nom' => 'Ramasseur Test',
-            'username' => 'test2',
+            'username' => 'ramsseur',
             'phone' => '243000000001',
             'role' => 'ramasseur',
             'email' => 'ramasseur@test.com',
@@ -62,12 +61,9 @@ class DatabaseSeeder extends Seeder
             'status' => 'success',
         ]);
 
-        foreach ([['Petite', 30], ['Moyenne', 60], ['Grande', 120], ['Tres grande', 240]] as [$nom, $capacite]) {
-            TaillePoubelle::firstOrCreate(['nom' => $nom], ['capacite' => $capacite, 'unite' => 'L']);
+        foreach ([['L', 30, 2000.00], ['M', 60, 3500.00], ['XL', 120, 6500.00], ['2XL', 240, 12000.00]] as [$nom, $capacite, $amount]) {
+            TaillePoubelle::firstOrCreate(['nom' => $nom], ['capacite' => $capacite, 'unite' => 'L', 'amount' => $amount, 'currency' => 'CDF', 'description' => $nom . ' poubelle de ' . $capacite . ' L']);
         }
 
-        foreach ([['Plastique', 'recyclable'], ['Papier', 'recyclable'], ['Carton', 'recyclable'], ['Dechets organiques', 'compostable'], ['Dechets residuels', 'residuel']] as [$nom, $categorie]) {
-            TypeDechet::firstOrCreate(['nom' => $nom], ['categorie' => $categorie]);
-        }
     }
 }

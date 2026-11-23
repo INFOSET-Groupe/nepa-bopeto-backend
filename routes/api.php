@@ -37,6 +37,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/ramasseur/collectes/disponibles', [CollecteController::class, 'disponibles']);
 
     Route::post('/collectes', [CollecteController::class, 'store']);
+    Route::get('/collectes/options', [CollecteController::class, 'options']);
     Route::get('/collectes/{collecte}', [CollecteController::class, 'show']);
     Route::post('/collectes/{collecte}/annuler', [CollecteController::class, 'annuler']);
     Route::post('/collectes/{collecte}/accepter', [CollecteController::class, 'accepter']);

@@ -14,6 +14,8 @@ return new class extends Migration
             $table->text('description')->nullable();
             $table->unsignedInteger('capacite');
             $table->string('unite', 10)->default('L');
+            $table->decimal('amount', 10, 2)->default(0.00);
+            $table->string('currency')->default('CDF');
             $table->enum('statut', ['actif', 'inactif'])->default('actif');
             $table->timestamps();
         });

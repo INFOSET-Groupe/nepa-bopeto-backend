@@ -12,6 +12,8 @@ class TaillePoubelle extends Model
 
     public function collectes()
     {
-        return $this->hasMany(Collecte::class);
+        return $this->belongsToMany(Collecte::class, 'collecte_taille_poubelle')
+            ->withPivot(['qte', 'type_dechet'])
+            ->withTimestamps();
     }
 }
