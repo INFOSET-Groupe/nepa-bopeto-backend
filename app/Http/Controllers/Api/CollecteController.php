@@ -4,21 +4,32 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Collecte;
-use App\Models\CollecteAffectation;
 use App\Models\TaillePoubelle;
 use App\Models\User;
 use App\Models\UserNotification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class CollecteController extends Controller
 {
 
     public function options()
     {
-        $taillesPoubelles = TaillePoubelle::all();
+        try {
+            $taillesPoubelles = TaillePoubelle::all();
 
-        return response()->json($taillesPoubelles);
+            return response()->json([
+                'success' => true,
+                'data' => $taillesPoubelles,
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de la récupération des options de collecte.', [
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
+        }
     }
 
     public function store(Request $request)
@@ -38,55 +49,130 @@ class CollecteController extends Controller
             'instructions' => ['nullable', 'string'],
         ]);
 
-        $collecte = DB::transaction(function () use ($request, $data) {
-            $user = $request->user();
-            $collecte = Collecte::create([
-                'reference' => 'TEMP-' . uniqid(),
-                'menage_id' => $user->id,
-                'adresse' => $data['adresse'],
-                'latitude' => $data['latitude'],
-                'longitude' => $data['longitude'],
-                'statut' => 'en_attente',
-                'demande_at' => now()
+        try {
+            $collecte = DB::transaction(function () use ($request, $data) {
+                $user = $request->user();
+                $collecte = Collecte::create([
+                    'reference' => 'TEMP-' . uniqid(),
+                    'menage_id' => $user->id,
+                    'adresse' => $data['adresse'],
+                    'latitude' => $data['latitude'],
+                    'longitude' => $data['longitude'],
+                    'statut' => 'en_attente',
+                    'planning_at' => $data['planning_at'] ?? null,
+                    'instructions' => $data['instructions'] ?? null,
+                    'dechets_tries' => $data['dechets_tries'] ?? false,
+                    'mode_paiement' => $data['mode_paiement'] ?? null,
+                    'demande_at' => now()
+                ]);
+
+                foreach ($data['tailles_poubelles'] as $taille) {
+                    $collecte->taillesPoubelles()->attach($taille['taille_poubelle_id'], ['qte' => $taille['qte'], 'type_dechet' => $taille['type_dechet']]);
+                }
+
+                $collecte->update(['reference' => 'COL-' . now()->format('Y') . '-' . str_pad((string) $collecte->id, 6, '0', STR_PAD_LEFT)]);
+
+                $ramasseurs = User::where('role', 'ramasseur')->where('disponible', true)->whereNotNull('latitude')->whereNotNull('longitude')->get()->filter(fn($ramasseur) => $this->distance($data['latitude'], $data['longitude'], $ramasseur->latitude, $ramasseur->longitude) <= (float) config('app.collecte_radius_km', 10));
+                foreach ($ramasseurs as $ramasseur) {
+                    UserNotification::create(['user_id' => $ramasseur->id, 'type' => 'nouvelle_collecte', 'titre' => 'Nouvelle demande de collecte', 'message' => 'Une collecte est disponible près de vous.', 'donnees' => ['collecte_id' => $collecte->id]]);
+                }
+                return $collecte;
+            });
+
+            return response()->json([
+                "success" => true,
+                'message' => 'Demande de collecte créée avec succès.',
+                'collecte' => $collecte->load('taillesPoubelles')
+            ], 201);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de la création d’une collecte.', [
+                'user_id' => $request->user()?->id,
+                'exception' => $exception,
             ]);
 
-            foreach ($data['tailles_poubelles'] as $taille) {
-                $collecte->taillesPoubelles()->attach($taille['taille_poubelle_id'], ['qte' => $taille['qte'], 'type_dechet' => $taille['type_dechet']]);
-            }
+            throw $exception;
+        }
+    }
 
-            $collecte->update(['reference' => 'COL-' . now()->format('Y') . '-' . str_pad((string) $collecte->id, 6, '0', STR_PAD_LEFT)]);
+    // update collecte par ramasseur au cas ou il constate sur le terrain que le menage n'a pas renseigné correctement les tailles de poubelles ou les types de déchets
+    public function update(Request $request, Collecte $collecte)
+    {
+        abort_unless($request->user()->isRamasseur() && $collecte->ramasseur_id === $request->user()->id, 403, 'Seul le ramasseur affecté peut modifier cette collecte.');
+        abort_unless(in_array($collecte->statut, ['acceptee'], true), 409, 'Cette collecte ne peut pas être modifiée.');
+        $data = $request->validate([
+            'tailles_poubelles' => ['required', 'array', 'min:1'],
+            'tailles_poubelles.*.taille_poubelle_id' => ['required', 'integer', 'distinct', 'exists:tailles_poubelles,id'],
+            'tailles_poubelles.*.qte' => ['required', 'integer', 'min:1'],
+            'tailles_poubelles.*.type_dechet' => ['required', 'in:compostable,recyclable,residuel'],
+            'dechets_tries' => ['nullable', 'boolean'],
+        ]);
 
-            $ramasseurs = User::where('role', 'ramasseur')->where('disponible', true)->whereNotNull('latitude')->whereNotNull('longitude')->get()->filter(fn($ramasseur) => $this->distance($data['latitude'], $data['longitude'], $ramasseur->latitude, $ramasseur->longitude) <= (float) config('app.collecte_radius_km', 10));
-            foreach ($ramasseurs as $ramasseur) {
-                CollecteAffectation::create(['collecte_id' => $collecte->id, 'ramasseur_id' => $ramasseur->id, 'statut' => 'en_attente', 'notifie_at' => now()]);
-                UserNotification::create(['user_id' => $ramasseur->id, 'type' => 'nouvelle_collecte', 'titre' => 'Nouvelle demande de collecte', 'message' => 'Une collecte est disponible près de vous.', 'donnees' => ['collecte_id' => $collecte->id]]);
-            }
-            $collecte->update(['statut' => 'disponible']);
-            return $collecte;
-        });
+        try {
+            DB::transaction(function () use ($collecte, $data) {
+                $collecte->taillesPoubelles()->detach();
+                $collecte->update([
+                    'dechets_tries' => $data['dechets_tries'] ?? false,
+                ]);
+                foreach ($data['tailles_poubelles'] as $taille) {
+                    $collecte->taillesPoubelles()->attach($taille['taille_poubelle_id'], ['qte' => $taille['qte'], 'type_dechet' => $taille['type_dechet']]);
+                }
+            });
 
-        return response()->json([
-            "success" => true,
-            'message' => 'Demande de collecte créée avec succès.',
-            'collecte' => $collecte->load('taillesPoubelles')
-        ], 201);
+            return response()->json([
+                'success' => true,
+                'message' => 'Collecte mise à jour avec succès.',
+                'collecte' => $collecte->load('taillesPoubelles'),
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de la mise à jour d’une collecte.', [
+                'collecte_id' => $collecte->id,
+                'user_id' => $request->user()->id,
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
+        }
     }
 
     public function index(Request $request)
     {
         abort_unless($request->user()->isMenage(), 403);
-        $query = $request->user()->collectes()->with(['taillesPoubelles', 'ramasseur']);
-        if ($request->filled('statut')) {
-            $query->where('statut', $request->string('statut'));
+        try {
+            $query = $request->user()->collectes()->with(['taillesPoubelles', 'ramasseur']);
+            if ($request->filled('statut')) {
+                $query->where('statut', $request->string('statut'));
+            }
+            return response()->json([
+                'success' => true,
+                'collectes' => $query->latest()->get(),
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de la récupération des collectes du ménage.', [
+                'user_id' => $request->user()->id,
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
         }
-        return response()->json($query->latest()->get());
     }
 
     public function disponibles(Request $request)
     {
         abort_unless($request->user()->isRamasseur(), 403);
-        $ramasseur = $request->user();
-        return response()->json($ramasseur->affectations()->where('statut', 'en_attente')->with('collecte.taillesPoubelles')->get()->pluck('collecte')->filter(fn($collecte) => $collecte->statut === 'disponible')->values());
+        try {
+            $collectes = Collecte::where('statut', 'en_attente')->with('taillesPoubelles')->get();
+            return response()->json([
+                'success' => true,
+                'collectes' => $collectes,
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de la récupération des collectes disponibles.', [
+                'user_id' => $request->user()->id,
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
+        }
     }
 
     public function proches(Request $request)
@@ -96,70 +182,242 @@ class CollecteController extends Controller
             'longitude' => ['required', 'numeric', 'between:-180,180']
         ]);
 
-        $ramasseurs = User::where('role', 'ramasseur')->where('disponible', true)->whereNotNull('latitude')->whereNotNull('longitude')->get()
-            ->map(function ($ramasseur) use ($data) {
-                $ramasseur->distance = round($this->distance($data['latitude'], $data['longitude'], $ramasseur->latitude, $ramasseur->longitude), 2);
-                return $ramasseur;
-            })->filter(fn($ramasseur) => $ramasseur->distance <= (float) config('app.collecte_radius_km', 10))->values();
+        try {
+            $ramasseurs = User::where('role', 'ramasseur')->where('disponible', true)->whereNotNull('latitude')->whereNotNull('longitude')->get()
+                ->map(function ($ramasseur) use ($data) {
+                    $ramasseur->distance = round($this->distance($data['latitude'], $data['longitude'], $ramasseur->latitude, $ramasseur->longitude), 2);
+                    return $ramasseur;
+                })->filter(fn($ramasseur) => $ramasseur->distance <= (float) config('app.collecte_radius_km', 10))->values();
 
-        return response()->json(['ramasseurs' => $ramasseurs->map(fn($ramasseur) => ['id' => $ramasseur->id, 'prenom' => $ramasseur->nom, 'latitude' => $ramasseur->latitude, 'longitude' => $ramasseur->longitude, 'distance' => $ramasseur->distance])]);
+            return response()->json([
+                'success' => true,
+                'ramasseurs' => $ramasseurs->map(fn($ramasseur) => ['id' => $ramasseur->id, 'prenom' => $ramasseur->nom, 'latitude' => $ramasseur->latitude, 'longitude' => $ramasseur->longitude, 'distance' => $ramasseur->distance]),
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de la recherche des ramasseurs proches.', [
+                'latitude' => $data['latitude'],
+                'longitude' => $data['longitude'],
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
+        }
     }
 
     public function show(Request $request, Collecte $collecte)
     {
-        abort_unless($this->canSee($request, $collecte), 403);
-        return response()->json($collecte->load(['menage', 'ramasseur', 'taillesPoubelles', 'affectations.ramasseur']));
+        $user = $request->user();
+        abort_unless(($user->isMenage() && $collecte->menage_id === $user->id) || ($user->isRamasseur() && $collecte->ramasseur_id === $user->id), 403);
+        try {
+            return response()->json([
+                'success' => true,
+                'collecte' => $collecte->load(['menage', 'ramasseur', 'taillesPoubelles', 'affectations.ramasseur']),
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de la récupération d’une collecte.', [
+                'collecte_id' => $collecte->id,
+                'user_id' => $user->id,
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
+        }
+    }
+
+    public function statut(Request $request, Collecte $collecte)
+    {
+        $user = $request->user();
+        abort_unless(($user->isMenage() && $collecte->menage_id === $user->id) || ($user->isRamasseur() && $collecte->ramasseur_id === $user->id), 403, 'Vous n’êtes pas autorisé à accéder au statut de cette collecte.');
+
+        return response()->json([
+            'success' => true,
+            'statut' => $collecte->statut,
+        ]);
+    }
+
+    public function accepted(Request $request)
+    {
+        $user = $request->user();
+        abort_unless($user->isRamasseur(), 403);
+        try {
+
+            $lastAcceptedCollecte = Collecte::where('ramasseur_id', $user->id)->where('statut', 'acceptee')->latest('acceptee_at')->first();
+            if (!$lastAcceptedCollecte) {
+                return response()->json([
+                    'collecte' => null,
+                    'message' => 'Aucune collecte acceptée trouvée.',
+                ]);
+            }
+            return response()->json([
+                'success' => true,
+                'message' => 'Dernière collecte acceptée récupérée avec succès.',
+                'collecte' => $lastAcceptedCollecte->load(['menage', 'ramasseur', 'taillesPoubelles', 'affectations']),
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de la récupération de la dernière collecte accepté par le ramasseur.', [
+                'user_id' => $user->id,
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
+        }
     }
 
     public function accepter(Request $request, Collecte $collecte)
     {
         abort_unless($request->user()->isRamasseur(), 403);
         $ramasseur = $request->user();
-        DB::transaction(function () use ($collecte, $ramasseur) {
-            $collecte = Collecte::whereKey($collecte->id)->lockForUpdate()->firstOrFail();
-            abort_unless($collecte->statut === 'disponible', 409, 'Cette demande a déjà été prise en charge.');
-            $affectation = $collecte->affectations()->where('ramasseur_id', $ramasseur->id)->where('statut', 'en_attente')->first();
-            abort_unless($affectation, 403);
-            $collecte->update(['ramasseur_id' => $ramasseur->id, 'statut' => 'acceptee', 'acceptee_at' => now()]);
-            $affectation->update(['statut' => 'acceptee', 'repondu_at' => now()]);
-            $collecte->affectations()->where('id', '!=', $affectation->id)->where('statut', 'en_attente')->update(['statut' => 'expiree', 'repondu_at' => now()]);
-            UserNotification::create(['user_id' => $collecte->menage_id, 'type' => 'collecte_acceptee', 'titre' => 'Demande acceptée', 'message' => 'Votre demande a été acceptée.', 'donnees' => ['collecte_id' => $collecte->id]]);
-        });
-        return $this->show($request, $collecte->fresh());
+        $lastAcceptedCollecte = Collecte::where('ramasseur_id', $ramasseur->id)->where('statut', 'acceptee')->latest('acceptee_at')->first();
+
+        /*if ($lastAcceptedCollecte) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Vous avez déjà une collecte en cours. Terminez la avant d’accepter une nouvelle.',
+            ], 409);
+        }*/
+
+        try {
+            DB::transaction(function () use ($collecte, $ramasseur) {
+                $collecte = Collecte::whereKey($collecte->id)->lockForUpdate()->firstOrFail();
+                abort_unless($collecte->statut === 'en_attente', 409, 'Cette demande a déjà été prise en charge.');
+                $collecte->affectations()->updateOrCreate(
+                    ['ramasseur_id' => $ramasseur->id],
+                    ['statut' => 'acceptee', 'repondu_at' => now()]
+                );
+                $collecte->update([
+                    'ramasseur_id' => $ramasseur->id,
+                    'statut' => 'acceptee',
+                    'acceptee_at' => now(),
+                    'terminee_at' => null,
+                    'annulee_at' => null,
+                    'motif_annulation' => null,
+                ]);
+                UserNotification::create(['user_id' => $collecte->menage_id, 'type' => 'collecte_acceptee', 'titre' => 'Demande acceptée', 'message' => 'Votre demande a été acceptée.', 'donnees' => ['collecte_id' => $collecte->id]]);
+            });
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Demande acceptée.',
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de l’acceptation d’une collecte.', [
+                'collecte_id' => $collecte->id,
+                'ramasseur_id' => $ramasseur->id,
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
+        }
     }
 
-    public function refuser(Request $request, Collecte $collecte)
-    {
-        abort_unless($request->user()->isRamasseur(), 403);
-        $affectation = $collecte->affectations()->where('ramasseur_id', $request->user()->id)->where('statut', 'en_attente')->firstOrFail();
-        $affectation->update(['statut' => 'refusee', 'repondu_at' => now()]);
-        return response()->json(['message' => 'Demande refusée.']);
-    }
-
-    public function transition(Request $request, Collecte $collecte, string $statut)
-    {
-        abort_unless($request->user()->isRamasseur() && $collecte->ramasseur_id === $request->user()->id, 403);
-        $statut = ['en-route' => 'en_route', 'arrive' => 'arrive', 'demarrer' => 'en_collecte', 'terminer' => 'terminee'][$statut] ?? $statut;
-        $transitions = ['en_route' => ['acceptee', 'en_route_at'], 'arrive' => ['en_route', 'arrivee_at'], 'en_collecte' => ['arrive', 'collecte_at'], 'terminee' => ['en_collecte', 'terminee_at']];
-        abort_unless(isset($transitions[$statut]) && $collecte->statut === $transitions[$statut][0], 409, 'Transition de statut invalide.');
-        $collecte->update(['statut' => $statut, $transitions[$statut][1] => now()]);
-        return $this->show($request, $collecte->fresh());
-    }
-
+    // anulation du menage
     public function annuler(Request $request, Collecte $collecte)
     {
-        abort_unless($this->canSee($request, $collecte), 403);
-        abort_unless(in_array($collecte->statut, ['en_attente', 'disponible', 'acceptee', 'en_route'], true), 409, 'Cette collecte ne peut plus être annulée.');
+        $menage = $request->user();
+        abort_unless($menage->isMenage() && $collecte->menage_id === $menage->id, 403);
         $data = $request->validate(['motif_annulation' => ['required', 'string']]);
-        $collecte->update(['statut' => 'annulee', 'annulee_at' => now(), 'motif_annulation' => $data['motif_annulation']]);
-        $collecte->affectations()->where('statut', 'en_attente')->update(['statut' => 'annulee']);
-        return $this->show($request, $collecte->fresh());
+        try {
+            DB::transaction(function () use ($collecte, $data) {
+                $collecte = Collecte::whereKey($collecte->id)->lockForUpdate()->firstOrFail();
+                abort_unless(in_array($collecte->statut, ['en_attente', 'acceptee'], true), 409, 'Cette collecte ne peut plus être annulée.');
+                $collecte->update([
+                    'statut' => 'annulee',
+                    'annulee_at' => now(),
+                    'ramasseur_id' => null,
+                    'motif_annulation' => $data['motif_annulation'],
+                ]);
+                $collecte->affectations()->where('statut', 'acceptee')->update([
+                    'statut' => 'annulee',
+                    'repondu_at' => now(),
+                ]);
+            });
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Collecte annulée avec succès.',
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de l’annulation d’une collecte par le ménage.', [
+                'collecte_id' => $collecte->id,
+                'menage_id' => $menage->id,
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
+        }
     }
 
-    private function canSee(Request $request, Collecte $collecte): bool
+    // anulation du ramasseur
+    public function interrompre(Request $request, Collecte $collecte)
     {
-        $user = $request->user();
-        return ($user->isMenage() && $collecte->menage_id === $user->id) || ($user->isRamasseur() && $collecte->ramasseur_id === $user->id);
+        $ramasseur = $request->user();
+        abort_unless($ramasseur->isRamasseur(), 403);
+        $data = $request->validate(['motif_annulation' => ['required', 'string']]);
+        try {
+            DB::transaction(function () use ($collecte, $ramasseur, $data) {
+                $collecte = Collecte::whereKey($collecte->id)->lockForUpdate()->firstOrFail();
+                abort_unless($collecte->ramasseur_id === $ramasseur->id,409,'Seul le ramasseur affecté peut annuler cette collecte.');
+                abort_unless($collecte->statut === 'acceptee',409,'Cette collecte ne peut pas être annulée.');
+                $affectation = $collecte->affectations()
+                    ->where('ramasseur_id', $ramasseur->id)
+                    ->where('statut', 'acceptee')
+                    ->firstOrFail();
+                $affectation->update(['statut' => 'annulee', 'repondu_at' => now()]);
+                $collecte->update([
+                    'statut' => 'en_attente',
+                    'annulee_at' => now(),
+                    'acceptee_at' => null,
+                    'ramasseur_id' => null,
+                    'motif_annulation' => $data['motif_annulation'],
+                ]);
+            });
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Collecte annulée avec succès.',
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de l’interruption d’une collecte par le ramasseur.', [
+                'collecte_id' => $collecte->id,
+                'ramasseur_id' => $ramasseur->id,
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
+        }
+    }
+
+    public function cloturer(Request $request, Collecte $collecte)
+    {
+        $ramasseur = $request->user();
+        abort_unless($ramasseur->isRamasseur(), 403);
+        try {
+            DB::transaction(function () use ($collecte, $ramasseur) {
+                $collecte = Collecte::whereKey($collecte->id)->lockForUpdate()->firstOrFail();
+                abort_unless($collecte->statut === 'acceptee' && $collecte->ramasseur_id === $ramasseur->id, 409,
+                    'Seul le ramasseur affecté peut clôturer cette collecte.'
+                );
+                $affectation = $collecte->affectations()
+                    ->where('ramasseur_id', $ramasseur->id)
+                    ->where('statut', 'acceptee')
+                    ->firstOrFail();
+                $affectation->update(['statut' => 'cloturee', 'repondu_at' => now()]);
+                $collecte->update(['statut' => 'cloturee', 'cloturee_at' => now()]);
+            });
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Collecte clôturée avec succès.',
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de la clôture d’une collecte.', [
+                'collecte_id' => $collecte->id,
+                'ramasseur_id' => $ramasseur->id,
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
+        }
     }
 
     private function distance(float $latitudeA, float $longitudeA, float $latitudeB, float $longitudeB): float

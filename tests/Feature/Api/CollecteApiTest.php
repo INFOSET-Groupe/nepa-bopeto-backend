@@ -51,7 +51,7 @@ test('un ramasseur peut mettre à jour sa position sur son compte utilisateur', 
         ->and((float) $ramasseur->fresh()->longitude)->toBe(15.312);
 });
 
-test('la première acceptation invalide les autres affectations', function () {
+test('une collecte n’enregistre que le ramasseur qui accepte', function () {
     $menageUser = User::factory()->create(['role' => 'menage']);
     $ramasseurUser = User::factory()->create(['role' => 'ramasseur']);
     $ramasseurUser->update(['disponible' => true, 'latitude' => 0, 'longitude' => 0]);
@@ -78,9 +78,10 @@ test('la première acceptation invalide les autres affectations', function () {
 
     $collecte = Collecte::first();
     expect($collecte->menage_id)->toBe($menageUser->id)
+        ->and($collecte->statut)->toBe('en_attente')
         ->and($collecte->type_dechet)->toBe('compostable')
         ->and($collecte->taillesPoubelles()->orderBy('tailles_poubelles.id')->pluck('collecte_taille_poubelle.qte')->all())->toBe([2, 1])
-        ->and($collecte->affectations()->pluck('ramasseur_id')->all())->toEqualCanonicalizing([$ramasseurUser->id, $secondRamasseur->id]);
+        ->and($collecte->affectations()->count())->toBe(0);
 
     $this->actingAs($ramasseurUser, 'sanctum')
         ->getJson('/api/ramasseur/collectes/disponibles')
@@ -95,12 +96,76 @@ test('la première acceptation invalide les autres affectations', function () {
     $this->actingAs($ramasseurUser, 'sanctum')
         ->postJson("/api/collectes/{$collecte->id}/accepter")
         ->assertOk()
-        ->assertJsonFragment(['id' => $ramasseurUser->id, 'role' => 'ramasseur'])
-        ->assertJsonFragment(['id' => $menageUser->id, 'role' => 'menage']);
+        ->assertJsonPath('success', true)
+        ->assertJsonPath('message', 'Demande acceptée.');
 
     expect($collecte->fresh()->statut)->toBe('acceptee')
         ->and($collecte->fresh()->ramasseur_id)->toBe($ramasseurUser->id)
-        ->and($collecte->affectations()->where('ramasseur_id', $secondRamasseur->id)->value('statut'))->toBe('expiree');
+        ->and($collecte->affectations()->count())->toBe(1)
+        ->and($collecte->affectations()->first()->ramasseur_id)->toBe($ramasseurUser->id)
+        ->and($collecte->affectations()->first()->statut)->toBe('acceptee');
+
+    $this->actingAs($menageUser, 'sanctum')
+        ->getJson("/api/collectes/{$collecte->id}/statut")
+        ->assertOk()
+        ->assertExactJson(['statut' => 'acceptee']);
+
+    $this->actingAs($secondRamasseur, 'sanctum')
+        ->getJson("/api/collectes/{$collecte->id}/statut")
+        ->assertForbidden();
+
+    $this->actingAs($secondRamasseur, 'sanctum')
+        ->postJson("/api/collectes/{$collecte->id}/accepter")
+        ->assertStatus(409);
+
+    expect($collecte->affectations()->count())->toBe(1);
+
+    $this->actingAs($ramasseurUser, 'sanctum')
+        ->postJson("/api/collectes/{$collecte->id}/terminer")
+        ->assertOk();
+
+    expect($collecte->fresh()->statut)->toBe('terminee');
+});
+
+test('le ramasseur annule son affectation et le menage peut ensuite annuler la collecte', function () {
+    $menageUser = User::factory()->create(['role' => 'menage']);
+    $ramasseurUser = User::factory()->create(['role' => 'ramasseur']);
+    $secondRamasseur = User::factory()->create(['role' => 'ramasseur']);
+    $taille = TaillePoubelle::create(['nom' => 'Moyenne', 'capacite' => 60, 'unite' => 'L']);
+
+    $this->actingAs($menageUser, 'sanctum')->postJson('/api/collectes', [
+        'tailles_poubelles' => [
+            ['taille_poubelle_id' => $taille->id, 'qte' => 1, 'type_dechet' => 'compostable'],
+        ],
+        'adresse' => 'Kinshasa',
+        'latitude' => 0,
+        'longitude' => 0,
+    ])->assertCreated();
+
+    $collecte = Collecte::firstOrFail();
+
+    $this->actingAs($ramasseurUser, 'sanctum')
+        ->postJson("/api/collectes/{$collecte->id}/accepter")
+        ->assertOk();
+
+    $this->actingAs($ramasseurUser, 'sanctum')
+        ->postJson("/api/collectes/{$collecte->id}/annuler", ['motif_annulation' => 'Indisponible'])
+        ->assertOk();
+
+    expect($collecte->fresh()->statut)->toBe('en_attente')
+        ->and($collecte->fresh()->ramasseur_id)->toBeNull()
+        ->and($collecte->affectations()->first()->statut)->toBe('annulee');
+
+    $this->actingAs($secondRamasseur, 'sanctum')
+        ->postJson("/api/collectes/{$collecte->id}/accepter")
+        ->assertOk();
+
+    $this->actingAs($menageUser, 'sanctum')
+        ->postJson("/api/collectes/{$collecte->id}/cancel", ['motif_annulation' => 'Demande annulée'])
+        ->assertOk();
+
+    expect($collecte->fresh()->statut)->toBe('annulee')
+        ->and($collecte->affectations()->where('ramasseur_id', $secondRamasseur->id)->value('statut'))->toBe('annulee');
 });
 
 test('une collecte refuse une catégorie de déchet inconnue', function () {

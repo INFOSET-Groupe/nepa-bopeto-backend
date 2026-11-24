@@ -17,19 +17,16 @@ return new class extends Migration
             $table->string('adresse');
             $table->decimal('latitude', 10, 7);
             $table->decimal('longitude', 10, 7);
-            $table->enum('statut', [
-                'en_attente', 'disponible', 'acceptee', 'en_route', 'arrive',
-                'en_collecte', 'terminee', 'annulee', 'expiree',
-            ])->default('en_attente')->index();
+            $table->enum('statut', ['en_attente', 'acceptee', 'annulee', 'cloturee', 'terminee'])
+                ->default('en_attente')
+                ->index();
             $table->boolean('dechets_tries')->default(false);
             $table->string('mode_paiement')->nullable();
             $table->string('instructions')->nullable();
             $table->timestamp('planning_at')->nullable();
             $table->timestamp('demande_at')->nullable();
             $table->timestamp('acceptee_at')->nullable();
-            $table->timestamp('en_route_at')->nullable();
-            $table->timestamp('arrivee_at')->nullable();
-            $table->timestamp('collecte_at')->nullable();
+            $table->timestamp('cloturee_at')->nullable();
             $table->timestamp('terminee_at')->nullable();
             $table->timestamp('annulee_at')->nullable();
             $table->text('motif_annulation')->nullable();
