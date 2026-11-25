@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Collecte;
-use App\Models\Garanty;
 use App\Models\Payment;
 use App\Services\FlexpaieService;
 use Illuminate\Http\Request;
@@ -13,22 +12,6 @@ use Illuminate\Support\Facades\Log;
 
 class PaymentController extends Controller
 {
-    public function index(Request $request)
-    {
-        $user = $request->user();
-        $garanty = $user->garanty()->first();
-
-        $last_payment = Payment::where('user_id', $user->id)
-            ->where('type', 'garanty')
-            ->orderBy('created_at', 'desc')
-            ->get();
-
-        return [
-            'garanty' => $garanty->montant ?? 0,
-            'disponible' => $garanty->reste ?? 0,
-            'liste_payment' => $last_payment,
-        ];
-    }
 
     public function initiate(Request $request, FlexpaieService $flexpaieService)
     {
@@ -79,7 +62,7 @@ class PaymentController extends Controller
                 $validation['phone'],
                 $validation['currency'],
                 $description,
-                route('api.garanty.callback')
+                route('api.collecte.callback')
             );
 
             $payment->update([
