@@ -6,7 +6,25 @@ use Illuminate\Database\Eloquent\Model;
 
 class Collecte extends Model
 {
-    protected $fillable = ['reference', 'menage_id', 'ramasseur_id', 'type_dechet', 'adresse', 'latitude', 'longitude', 'statut', 'demande_at', 'acceptee_at', 'cloturee_at', 'terminee_at', 'annulee_at', 'motif_annulation'];
+    protected $fillable = [
+        'reference',
+        'menage_id',
+        'ramasseur_id',
+        'type_dechet',
+        'adresse',
+        'latitude',
+        'longitude',
+        'statut',
+        'demande_at',
+        'acceptee_at',
+        'cloturee_at',
+        'terminee_at',
+        'annulee_at',
+        'motif_annulation',
+        'montant',
+        'pluie',
+        'temps_attente'
+    ];
 
     protected function casts(): array
     {

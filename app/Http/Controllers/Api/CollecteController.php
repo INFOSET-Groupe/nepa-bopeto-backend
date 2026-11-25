@@ -40,6 +40,7 @@ class CollecteController extends Controller
             'tailles_poubelles.*.taille_poubelle_id' => ['required', 'integer', 'distinct', 'exists:tailles_poubelles,id'],
             'tailles_poubelles.*.qte' => ['required', 'integer', 'min:1'],
             'tailles_poubelles.*.type_dechet' => ['required', 'in:compostable,recyclable,residuel'],
+            'montant' => ['required', 'numeric', 'min:0'],
             'adresse' => ['required', 'string'],
             'latitude' => ['required', 'numeric', 'between:-90,90'],
             'longitude' => ['required', 'numeric', 'between:-180,180'],
@@ -56,6 +57,7 @@ class CollecteController extends Controller
                     'reference' => 'TEMP-' . uniqid(),
                     'menage_id' => $user->id,
                     'adresse' => $data['adresse'],
+                    'montant' => $data['montant'],
                     'latitude' => $data['latitude'],
                     'longitude' => $data['longitude'],
                     'statut' => 'en_attente',
@@ -104,6 +106,7 @@ class CollecteController extends Controller
             'tailles_poubelles.*.taille_poubelle_id' => ['required', 'integer', 'distinct', 'exists:tailles_poubelles,id'],
             'tailles_poubelles.*.qte' => ['required', 'integer', 'min:1'],
             'tailles_poubelles.*.type_dechet' => ['required', 'in:compostable,recyclable,residuel'],
+            'montant' => ['required', 'numeric', 'min:0'],
             'dechets_tries' => ['nullable', 'boolean'],
         ]);
 
@@ -125,6 +128,29 @@ class CollecteController extends Controller
             ]);
         } catch (\Throwable $exception) {
             Log::error('Erreur lors de la mise à jour d’une collecte.', [
+                'collecte_id' => $collecte->id,
+                'user_id' => $request->user()->id,
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
+        }
+    }
+
+    public function ranningToggle(Request $request, Collecte $collecte)
+    {
+        // abort_unless($request->user()->isRamasseur() && $collecte->ramasseur_id === $request->user()->id, 403, 'Seul le ramasseur affecté ');
+
+        try {
+
+            $collecte->update(['pluie' => true]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Mode de pluie mis à jour avec succès.',
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error("Erreur lors d'activation mode pulie.", [
                 'collecte_id' => $collecte->id,
                 'user_id' => $request->user()->id,
                 'exception' => $exception,
@@ -269,12 +295,12 @@ class CollecteController extends Controller
         $ramasseur = $request->user();
         $lastAcceptedCollecte = Collecte::where('ramasseur_id', $ramasseur->id)->where('statut', 'acceptee')->latest('acceptee_at')->first();
 
-        /*if ($lastAcceptedCollecte) {
+        if ($lastAcceptedCollecte) {
             return response()->json([
                 'success' => false,
                 'message' => 'Vous avez déjà une collecte en cours. Terminez la avant d’accepter une nouvelle.',
             ], 409);
-        }*/
+        }
 
         try {
             DB::transaction(function () use ($collecte, $ramasseur) {
@@ -315,20 +341,18 @@ class CollecteController extends Controller
     {
         $menage = $request->user();
         abort_unless($menage->isMenage() && $collecte->menage_id === $menage->id, 403);
-        $data = $request->validate(['motif_annulation' => ['required', 'string']]);
+
         try {
-            DB::transaction(function () use ($collecte, $data) {
+            DB::transaction(function () use ($collecte) {
                 $collecte = Collecte::whereKey($collecte->id)->lockForUpdate()->firstOrFail();
                 abort_unless(in_array($collecte->statut, ['en_attente', 'acceptee'], true), 409, 'Cette collecte ne peut plus être annulée.');
                 $collecte->update([
                     'statut' => 'annulee',
                     'annulee_at' => now(),
                     'ramasseur_id' => null,
-                    'motif_annulation' => $data['motif_annulation'],
                 ]);
                 $collecte->affectations()->where('statut', 'acceptee')->update([
-                    'statut' => 'annulee',
-                    'repondu_at' => now(),
+                    'statut' => 'annulee'
                 ]);
             });
 

@@ -42,8 +42,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/collectes/accepted', [CollecteController::class, 'accepted']);
     Route::get('/collectes/{collecte}/statut', [CollecteController::class, 'statut']);
     Route::get('/collectes/{collecte}', [CollecteController::class, 'show']);
-    Route::post('/collectes/{collecte}/annuler', [CollecteController::class, 'annuler']);
     Route::post('/collectes/{collecte}/accepter', [CollecteController::class, 'accepter']);
+    Route::post('/collectes/{collecte}/annuler', [CollecteController::class, 'annuler']);
+    Route::post('/collectes/{collecte}/pluie', [CollecteController::class, 'ranningToggle']); // Pour activer le mode pluie dans une collecte
     Route::post('/collectes/{collecte}/cloturer', [CollecteController::class, 'cloturer']);
     Route::post('/collectes/{collecte}/interrompre', [CollecteController::class, 'interrompre']);
 });

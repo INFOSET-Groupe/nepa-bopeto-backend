@@ -13,15 +13,16 @@ return new class extends Migration
             $table->string('reference')->unique();
             $table->foreignId('menage_id')->constrained('users')->cascadeOnDelete();
             $table->foreignId('ramasseur_id')->nullable()->constrained('users')->nullOnDelete();
-            $table->foreignId('taille_poubelle_id')->constrained('tailles_poubelles')->restrictOnDelete();
+            $table->decimal('montant', 10, 2)->default(0);
+            $table->string('mode_paiement')->nullable();
             $table->string('adresse');
             $table->decimal('latitude', 10, 7);
             $table->decimal('longitude', 10, 7);
             $table->enum('statut', ['en_attente', 'acceptee', 'annulee', 'cloturee', 'terminee'])
-                ->default('en_attente')
-                ->index();
+            ->default('en_attente')->index();
             $table->boolean('dechets_tries')->default(false);
-            $table->string('mode_paiement')->nullable();
+            $table->boolean('pluie')->default(false);
+            $table->string('temps_attente', 50)->nullable();
             $table->string('instructions')->nullable();
             $table->timestamp('planning_at')->nullable();
             $table->timestamp('demande_at')->nullable();

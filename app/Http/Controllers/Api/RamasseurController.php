@@ -31,8 +31,7 @@ class RamasseurController extends Controller
                 'latitude',
                 'longitude',
                 'precision_position'
-            ])->all(),
-            'derniere_position_at' => $data['disponible'] ? now() : $ramasseur->derniere_position_at
+            ])->all()
         ]);
 
 
@@ -59,13 +58,14 @@ class RamasseurController extends Controller
             'collecte_id' => ['nullable', 'exists:collectes,id']
         ]);
         $ramasseur = $request->user();
-        $ramasseur->update([...collect($data)->only([
-            'latitude',
-            'longitude',
-            'precision_position'
-        ])->all(), 'derniere_position_at' => now()]);
+        $ramasseur->update([
+            ...collect($data)->only([
+                'latitude',
+                'longitude',
+                'precision_position'
+            ])->all()
+        ]);
 
         return response()->json($ramasseur->fresh());
     }
-
 }

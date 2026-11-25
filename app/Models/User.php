@@ -25,12 +25,11 @@ class User extends Authenticatable
         'role',
         'adresse',
         'disponible',
-        '   ',
+        'flexpaie_code',
         'latitude',
         'longitude',
         'statut',
         'precision_position',
-        'derniere_position_at'
     ];
 
     protected $hidden = [

@@ -81,6 +81,7 @@ class GarantyController extends Controller
                 'request_data' => $request->all(),
             ]);
             return response()->json([
+                'code' => '1',
                 'message' => 'Une erreur est survenue lors de l\'initiation du paiement de garantie.',
                 'error' => $e->getMessage(),
             ], 500);
@@ -173,10 +174,6 @@ class GarantyController extends Controller
                 }
 
                 DB::transaction(function () use ($payment) {
-                    $payment->update([
-                        'status' => 'success'
-                    ]);
-
                     $garanty = Garanty::firstOrCreate(
                         [
                             'ramasseur_id' => $payment->user_id
@@ -187,6 +184,11 @@ class GarantyController extends Controller
                             'currency' => $payment->currency
                         ]
                     );
+
+                    $payment->update([
+                        'status' => 'success',
+                        'garanty_id' => $garanty->id
+                    ]);
 
                     $amountPaid = $payment->montant;
 

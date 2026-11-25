@@ -32,7 +32,8 @@ class DatabaseSeeder extends Seeder
 
         $ramasseurUser = User::factory()->create([
             'nom' => 'Ramasseur Test',
-            'username' => 'ramsseur',
+            'username' => 'ramasseur',
+            'flexpaie_code' => 'ramasseur123',
             'phone' => '243000000001',
             'role' => 'ramasseur',
             'email' => 'ramasseur@test.com',
@@ -55,6 +56,38 @@ class DatabaseSeeder extends Seeder
         Payment::create([
             'user_id' => $ramasseurUser->id,
             'garanty_id' => $garanty->id,
+            'type' => 'garanty',
+            'montant' => 10000.00,
+            'currency' => 'CDF',
+            'status' => 'success',
+        ]);
+
+        $ramasseurUser2 = User::factory()->create([
+            'nom' => 'John kisina',
+            'username' => 'john',
+            'flexpaie_code' => 'ramasseur13',
+            'phone' => '243000000002',
+            'role' => 'ramasseur',
+            'email' => 'john.kisina@gmail.com',
+            'precision_position' => 5,
+            'disponible' => true,
+            'latitude' => -4.4419,
+            'longitude' => 15.2663,
+            'precision_position' => 5,
+            'flexpaie_code' => fake()->unique()->numerify('#########'),
+            'password' => Hash::make('12345678'),
+        ]);
+
+        $garanty2 = $ramasseurUser2->garanty()->create([
+            'montant' => 10000.00,
+            'reste' => 10000.00,
+            'currency' => 'CDF',
+            'ramasseur_id' => $ramasseurUser2->id,
+        ]);
+
+        Payment::create([
+            'user_id' => $ramasseurUser2->id,
+            'garanty_id' => $garanty2->id,
             'type' => 'garanty',
             'montant' => 10000.00,
             'currency' => 'CDF',
