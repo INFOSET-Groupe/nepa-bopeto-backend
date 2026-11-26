@@ -241,6 +241,7 @@ class PaymentController extends Controller
     public function check(Request $request, FlexpaieService $flexpaieService)
     {
         $user = $request->user();
+        abort_unless($user && $user->isMenage(), 403, 'Seul un profil ménage peut vérifier un paiement de collecte.');
 
         $validation = $request->validate([
             'order_number' => ['required', 'string'],

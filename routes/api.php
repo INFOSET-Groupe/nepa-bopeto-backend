@@ -25,9 +25,6 @@ Route::get('/ramasseurs/proches', [CollecteController::class, 'proches']);
 Route::post('/menage/collecte/callback/{reference}', [PaymentController::class, 'callback'])->name('api.collecte.callback');
 Route::post('/ramasseur/garanty/callback/{reference}', [GarantyController::class, 'callback'])->name('api.garanty.callback');
 
-Route::get('/menage/collecte/check', [PaymentController::class, 'check'])->name('api.collecte.check');
-Route::get('/ramasseur/garanty/check', [GarantyController::class, 'check'])->name('api.garanty.check');
-
 Route::middleware('auth:sanctum')->group(function () {
     Route::put('/user/profil', [ProfileController::class, 'update']);
 
@@ -37,11 +34,13 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/menage/payment', [PaymentController::class, 'index']);
     Route::post('/menage/collecte/pay', [PaymentController::class, 'initiate']);
+    Route::get('/menage/collecte/check', [PaymentController::class, 'check'])->name('api.collecte.check');
 
     Route::get('/ramasseur/collectes', [CollecteController::class, 'indexRamasseur']); //
 
     Route::get('/ramasseur/garanty', [GarantyController::class, 'index']);
     Route::post('/ramasseur/garanty/pay', [GarantyController::class, 'initiate']);
+    Route::get('/ramasseur/garanty/check', [GarantyController::class, 'check'])->name('api.garanty.check');
 
     Route::get('/ramasseur/profil', [RamasseurController::class, 'profil']);
     Route::post('/ramasseur/disponibilite', [RamasseurController::class, 'disponibilite']);
