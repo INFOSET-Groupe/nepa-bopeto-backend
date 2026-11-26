@@ -210,7 +210,6 @@ class GarantyController extends Controller
     public function check(Request $request, FlexpaieService $flexpaieService)
     {
         $user = $request->user();
-        abort_unless($user->isRamasseur(), 403, 'Seul un profil ramasseur peut vérifier un paiement de garantie.');
 
         $validation = $request->validate([
             'order_number' => ['required', 'string'],

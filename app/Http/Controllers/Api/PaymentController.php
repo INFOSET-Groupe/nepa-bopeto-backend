@@ -177,6 +177,8 @@ class PaymentController extends Controller
             $callbackCode = $content['code'] ?? null;
 
             if (! is_int($callbackCode) && ! is_string($callbackCode)) {
+                Log::warning('Callback recu code invalide.');
+
                 return response()->json([
                     'success' => false,
                     'message' => 'Code de callback invalide.',
@@ -239,7 +241,6 @@ class PaymentController extends Controller
     public function check(Request $request, FlexpaieService $flexpaieService)
     {
         $user = $request->user();
-        abort_unless($user->isMenage(), 403, 'Seul un profil ménage peut vérifier un paiement de collecte.');
 
         $validation = $request->validate([
             'order_number' => ['required', 'string'],
