@@ -170,29 +170,16 @@ class PaymentController extends Controller
         }
     }
 
-    public function callback(Request $request, FlexpaieService $flexpaieService, string $reference)
+    public function callback(Request $request, string $reference)
     {
         try {
             $content = $request->json()->all();
             $callbackCode = $content['code'] ?? null;
-            $callbackStatus = $content['status'] ?? null;
 
-            Log::warning('Données de callback reçue pour le paiement de collecte.', [
-                'reference' => $reference,
-                'code' => $callbackCode,
-                'status' => $callbackStatus,
-            ]);
-
-            if ((string) $callbackCode !== '0' || ! in_array((string) $callbackStatus, ['0', '1', '2', '4'], true)) {
-                Log::warning('Données de callback invalides pour un paiement de collecte.', [
-                    'reference' => $reference,
-                    'code' => $callbackCode,
-                    'status' => $callbackStatus,
-                ]);
-
+            if (! is_int($callbackCode) && ! is_string($callbackCode)) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Code ou statut de callback invalide.',
+                    'message' => 'Code de callback invalide.',
                 ], 422);
             }
 
@@ -210,47 +197,32 @@ class PaymentController extends Controller
                 ], 404);
             }
 
-            if (! $payment->order_number) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Le numéro de commande du paiement n’est pas encore disponible.',
-                ], 409);
-            }
 
-            $response = $flexpaieService->getPaymentStatus($payment->order_number);
-            if ((string) ($response['code'] ?? '') !== '0') {
-                Log::warning('Vérification FlexPay échouée pour le callback de collecte.', [
+            if ((string) $callbackCode !== '0') {
+                $paymentStatus = $this->closeCollectePayment($payment, 1);
+
+                Log::info('Callback de paiement de collecte signalé en échec.', [
                     'reference' => $reference,
+                    'code' => $callbackCode,
+                    'payment_status' => $paymentStatus,
                 ]);
 
                 return response()->json([
-                    'success' => false,
-                    'message' => 'Impossible de vérifier le paiement auprès de FlexPay.',
-                ], 502);
-            }
-
-            $verifiedStatus = $response['transaction']['status'] ?? null;
-            if ($verifiedStatus === null || (string) $verifiedStatus !== (string) $callbackStatus) {
-                Log::warning('Le statut du callback ne correspond pas au statut vérifié par FlexPay.', [
-                    'reference' => $reference,
-                    'callback_status' => $callbackStatus,
-                    'verified_status' => $verifiedStatus,
+                    'success' => true,
+                    'payment_status' => $paymentStatus,
                 ]);
-
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Le statut du callback ne correspond pas au statut vérifié par FlexPay.',
-                ], 409);
             }
 
-            $this->closeCollectePayment($payment, $verifiedStatus);
+            $paymentStatus = $this->closeCollectePayment($payment, 0);
+
             Log::info('Callback de paiement de collecte traité.', [
                 'reference' => $reference,
-                'status' => $verifiedStatus,
+                'payment_status' => $paymentStatus,
             ]);
 
             return response()->json([
                 'success' => true,
+                'payment_status' => $paymentStatus,
             ]);
         } catch (\Throwable $e) {
             Log::error('Erreur lors du callback de paiement de collecte.', [

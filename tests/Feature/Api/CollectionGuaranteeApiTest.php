@@ -144,7 +144,7 @@ test('un paiement mobile confirmé débite la garantie une seule fois', function
         ->and(Payment::where('type', 'commission')->where('collecte_id', $collecte->id)->count())->toBe(1);
 });
 
-test('le callback valide code et statut avant de confirmer le paiement', function () {
+test('le callback valide les informations FlexPay avant de confirmer le paiement', function () {
     $menage = User::factory()->create(['role' => 'menage']);
     $ramasseur = User::factory()->create(['role' => 'ramasseur']);
     $collecte = createCollectionForGuaranteeTests($menage, $ramasseur);
@@ -168,20 +168,16 @@ test('le callback valide code et statut avant de confirmer le paiement', functio
         'order_number' => 'ORDER-CALLBACK-1',
     ]);
 
-    $this->mock(FlexpaieService::class, function ($mock) {
-        $mock->shouldReceive('getPaymentStatus')
-            ->once()
-            ->with('ORDER-CALLBACK-1')
-            ->andReturn([
-                'code' => 0,
-                'transaction' => ['status' => 0],
-                'message' => 'Paiement confirmé.',
-            ]);
-    });
-
     $this->postJson('/api/menage/collecte/callback/PCOL-CALLBACK-1', [
         'code' => 0,
-        'status' => 0,
+        'reference' => 'PCOL-CALLBACK-1',
+        'orderNumber' => 'ORDER-CALLBACK-1',
+        'amount' => 8000,
+        'amountCustomer' => 8000,
+        'phone' => '243811111111',
+        'currency' => 'CDF',
+        'createdAt' => '26-11-2026 18:25:35',
+        'channel' => 'mpesa',
     ])
         ->assertOk()
         ->assertJsonPath('success', true);
@@ -190,6 +186,28 @@ test('le callback valide code et statut avant de confirmer le paiement', functio
         ->and($collecte->fresh()->statut)->toBe('terminee')
         ->and((float) $garanty->fresh()->reste)->toBe(3400.0)
         ->and(Payment::where('type', 'commission')->where('collecte_id', $collecte->id)->count())->toBe(1);
+});
+
+test('un callback de garantie avec code 1 marque le paiement échoué sans statut', function () {
+    $ramasseur = User::factory()->create(['role' => 'ramasseur']);
+    $payment = Payment::create([
+        'user_id' => $ramasseur->id,
+        'type' => 'garanty',
+        'montant' => 8000,
+        'currency' => 'CDF',
+        'status' => 'pending',
+        'method' => 'mobile',
+        'reference' => 'GRT-CALLBACK-FAILED',
+    ]);
+
+    $this->postJson('/api/ramasseur/garanty/callback/GRT-CALLBACK-FAILED', [
+        'code' => 1,
+    ])
+        ->assertOk()
+        ->assertJsonPath('success', true)
+        ->assertJsonPath('payment_status', 'failed');
+
+    expect($payment->fresh()->status)->toBe('failed');
 });
 
 test('une nouvelle tentative est permise si FlexPay confirme l’annulation du paiement précédent', function () {
