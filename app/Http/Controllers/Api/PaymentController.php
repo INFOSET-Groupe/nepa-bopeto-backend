@@ -33,7 +33,7 @@ class PaymentController extends Controller
 
         $validation = $request->validate([
             'collecte_id' => ['required', 'exists:collectes,id'],
-            'montant' => ['required', 'numeric', 'min:5000'],
+            'montant' => ['required', 'numeric'],
             'currency' => ['required', 'string', 'in:CDF'],
             'phone' => ['nullable', 'string', 'size:12', 'required_if:methode,mobile'],
             'methode' => ['required', 'string', 'in:cash,mobile'],
@@ -140,7 +140,7 @@ class PaymentController extends Controller
                 $validation['phone'],
                 $validation['currency'],
                 $description,
-                route('api.collecte.callback')
+                route('api.collecte.callback', ['reference' => $reference])
             );
 
             $initiated = (string) ($response['code'] ?? '1') === '0';
@@ -170,14 +170,29 @@ class PaymentController extends Controller
         }
     }
 
-    public function callback(Request $request, FlexpaieService $flexpaieService)
+    public function callback(Request $request, FlexpaieService $flexpaieService, string $reference)
     {
         try {
-            $reference = $request->input('reference');
-            if (! is_string($reference) || $reference === '') {
+            $content = $request->json()->all();
+            $callbackCode = $content['code'] ?? null;
+            $callbackStatus = $content['status'] ?? null;
+
+            Log::warning('Données de callback reçue pour le paiement de collecte.', [
+                'reference' => $reference,
+                'code' => $callbackCode,
+                'status' => $callbackStatus,
+            ]);
+
+            if ((string) $callbackCode !== '0' || ! in_array((string) $callbackStatus, ['0', '1', '2', '4'], true)) {
+                Log::warning('Données de callback invalides pour un paiement de collecte.', [
+                    'reference' => $reference,
+                    'code' => $callbackCode,
+                    'status' => $callbackStatus,
+                ]);
+
                 return response()->json([
                     'success' => false,
-                    'message' => 'Référence de paiement manquante.',
+                    'message' => 'Code ou statut de callback invalide.',
                 ], 422);
             }
 
@@ -214,18 +229,24 @@ class PaymentController extends Controller
                 ], 502);
             }
 
-            $flexStatus = $response['transaction']['status'] ?? null;
-            if ($flexStatus === null) {
+            $verifiedStatus = $response['transaction']['status'] ?? null;
+            if ($verifiedStatus === null || (string) $verifiedStatus !== (string) $callbackStatus) {
+                Log::warning('Le statut du callback ne correspond pas au statut vérifié par FlexPay.', [
+                    'reference' => $reference,
+                    'callback_status' => $callbackStatus,
+                    'verified_status' => $verifiedStatus,
+                ]);
+
                 return response()->json([
                     'success' => false,
-                    'message' => 'Statut FlexPay manquant.',
-                ], 502);
+                    'message' => 'Le statut du callback ne correspond pas au statut vérifié par FlexPay.',
+                ], 409);
             }
 
-            $this->closeCollectePayment($payment, $flexStatus);
+            $this->closeCollectePayment($payment, $verifiedStatus);
             Log::info('Callback de paiement de collecte traité.', [
                 'reference' => $reference,
-                'status' => $flexStatus,
+                'status' => $verifiedStatus,
             ]);
 
             return response()->json([
@@ -323,7 +344,7 @@ class PaymentController extends Controller
             '0' => 'success',
             '1' => 'failed',
             '2' => 'pending',
-            '4' => 'cancelled',
+            '4' => 'failed',
             default => null,
         };
 

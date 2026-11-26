@@ -22,8 +22,8 @@ Route::prefix('auth')->group(function () {
 
 Route::get('/ramasseurs/proches', [CollecteController::class, 'proches']);
 
-Route::post('/menage/collecte/callback', [PaymentController::class, 'callback'])->name('api.collecte.callback');
-Route::post('/ramasseur/garanty/callback', [GarantyController::class, 'callback'])->name('api.garanty.callback');
+Route::post('/menage/collecte/callback/{reference}', [PaymentController::class, 'callback'])->name('api.collecte.callback');
+Route::post('/ramasseur/garanty/callback/{reference}', [GarantyController::class, 'callback'])->name('api.garanty.callback');
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::put('/user/profil', [ProfileController::class, 'update']);

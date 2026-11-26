@@ -31,6 +31,7 @@ class FlexpaieService
             'description' => $description,
             'phone' => $phone,
             'amount' => $amount,
+            //'amount' => "100",
             'currency' => $currency,
             'callback_url' => $callbackUrl,
         ]);

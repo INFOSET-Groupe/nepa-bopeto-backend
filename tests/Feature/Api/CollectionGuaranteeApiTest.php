@@ -143,3 +143,157 @@ test('un paiement mobile confirmé débite la garantie une seule fois', function
         ->and((float) $garanty->fresh()->reste)->toBe(3400.0)
         ->and(Payment::where('type', 'commission')->where('collecte_id', $collecte->id)->count())->toBe(1);
 });
+
+test('le callback valide code et statut avant de confirmer le paiement', function () {
+    $menage = User::factory()->create(['role' => 'menage']);
+    $ramasseur = User::factory()->create(['role' => 'ramasseur']);
+    $collecte = createCollectionForGuaranteeTests($menage, $ramasseur);
+    $garanty = Garanty::create([
+        'ramasseur_id' => $ramasseur->id,
+        'montant' => 5000,
+        'reste' => 5000,
+        'currency' => 'CDF',
+    ]);
+
+    $payment = Payment::create([
+        'user_id' => $menage->id,
+        'collecte_id' => $collecte->id,
+        'type' => 'collecte',
+        'montant' => 8000,
+        'currency' => 'CDF',
+        'status' => 'pending',
+        'method' => 'mobile',
+        'phone' => '243811111111',
+        'reference' => 'PCOL-CALLBACK-1',
+        'order_number' => 'ORDER-CALLBACK-1',
+    ]);
+
+    $this->mock(FlexpaieService::class, function ($mock) {
+        $mock->shouldReceive('getPaymentStatus')
+            ->once()
+            ->with('ORDER-CALLBACK-1')
+            ->andReturn([
+                'code' => 0,
+                'transaction' => ['status' => 0],
+                'message' => 'Paiement confirmé.',
+            ]);
+    });
+
+    $this->postJson('/api/menage/collecte/callback/PCOL-CALLBACK-1', [
+        'code' => 0,
+        'status' => 0,
+    ])
+        ->assertOk()
+        ->assertJsonPath('success', true);
+
+    expect($payment->fresh()->status)->toBe('success')
+        ->and($collecte->fresh()->statut)->toBe('terminee')
+        ->and((float) $garanty->fresh()->reste)->toBe(3400.0)
+        ->and(Payment::where('type', 'commission')->where('collecte_id', $collecte->id)->count())->toBe(1);
+});
+
+test('une nouvelle tentative est permise si FlexPay confirme l’annulation du paiement précédent', function () {
+    $menage = User::factory()->create(['role' => 'menage']);
+    $ramasseur = User::factory()->create(['role' => 'ramasseur']);
+    $collecte = createCollectionForGuaranteeTests($menage, $ramasseur);
+    Garanty::create([
+        'ramasseur_id' => $ramasseur->id,
+        'montant' => 5000,
+        'reste' => 5000,
+        'currency' => 'CDF',
+    ]);
+
+    $previousPayment = Payment::create([
+        'user_id' => $menage->id,
+        'collecte_id' => $collecte->id,
+        'type' => 'collecte',
+        'montant' => 8000,
+        'currency' => 'CDF',
+        'status' => 'pending',
+        'method' => 'mobile',
+        'phone' => '243811111111',
+        'reference' => 'PCOL-PREVIOUS-1',
+        'order_number' => 'ORDER-PREVIOUS-1',
+    ]);
+
+    $this->mock(FlexpaieService::class, function ($mock) {
+        $mock->shouldReceive('getPaymentStatus')
+            ->once()
+            ->with('ORDER-PREVIOUS-1')
+            ->andReturn([
+                'code' => 0,
+                'transaction' => ['status' => 4],
+            ]);
+
+        $mock->shouldReceive('mobilePaymentMerchant')
+            ->once()
+            ->andReturn([
+                'code' => 0,
+                'orderNumber' => 'ORDER-RETRY-1',
+                'message' => 'Paiement initié.',
+            ]);
+    });
+
+    $this->actingAs($menage, 'sanctum')
+        ->postJson('/api/menage/collecte/pay', [
+            'collecte_id' => $collecte->id,
+            'montant' => 8000,
+            'currency' => 'CDF',
+            'methode' => 'mobile',
+            'phone' => '243811111111',
+        ])
+        ->assertOk()
+        ->assertJsonPath('success', true);
+
+    expect($previousPayment->fresh()->status)->toBe('cancelled')
+        ->and(Payment::where('collecte_id', $collecte->id)->where('status', 'pending')->count())->toBe(1);
+});
+
+test('une nouvelle tentative reste bloquée tant que FlexPay signale un paiement en attente', function () {
+    $menage = User::factory()->create(['role' => 'menage']);
+    $ramasseur = User::factory()->create(['role' => 'ramasseur']);
+    $collecte = createCollectionForGuaranteeTests($menage, $ramasseur);
+    Garanty::create([
+        'ramasseur_id' => $ramasseur->id,
+        'montant' => 5000,
+        'reste' => 5000,
+        'currency' => 'CDF',
+    ]);
+
+    Payment::create([
+        'user_id' => $menage->id,
+        'collecte_id' => $collecte->id,
+        'type' => 'collecte',
+        'montant' => 8000,
+        'currency' => 'CDF',
+        'status' => 'pending',
+        'method' => 'mobile',
+        'phone' => '243811111111',
+        'reference' => 'PCOL-PENDING-1',
+        'order_number' => 'ORDER-PENDING-1',
+    ]);
+
+    $this->mock(FlexpaieService::class, function ($mock) {
+        $mock->shouldReceive('getPaymentStatus')
+            ->once()
+            ->with('ORDER-PENDING-1')
+            ->andReturn([
+                'code' => 0,
+                'transaction' => ['status' => 2],
+            ]);
+
+        $mock->shouldNotReceive('mobilePaymentMerchant');
+    });
+
+    $this->actingAs($menage, 'sanctum')
+        ->postJson('/api/menage/collecte/pay', [
+            'collecte_id' => $collecte->id,
+            'montant' => 8000,
+            'currency' => 'CDF',
+            'methode' => 'mobile',
+            'phone' => '243811111111',
+        ])
+        ->assertStatus(409);
+
+    expect(Payment::where('collecte_id', $collecte->id)->count())->toBe(1);
+});

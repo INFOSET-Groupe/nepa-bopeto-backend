@@ -42,14 +42,14 @@ class GarantyController extends Controller
                 'montant' => 'required|numeric|min:5000',
                 'currency' => 'required|string|in:CDF',
                 'phone' => 'required|string|size:12',
-                'methode' => 'required|string|in:cash,mobile'
+                'methode' => 'required|string|in:cash,mobile',
             ]);
 
-            $reference = 'GRT-' . strtoupper(uniqid());
-            $description = 'Paiement de garantie pour le ramasseur ' . $user->name;
+            $reference = 'GRT-'.strtoupper(uniqid());
+            $description = 'Paiement de garantie pour le ramasseur '.$user->name;
             $method = $validation['methode'];
 
-            if ($method == 'mobile' && !$validation['phone']) {
+            if ($method == 'mobile' && ! $validation['phone']) {
                 return response()->json([
                     'code' => '1',
                     'message' => 'Numéro de téléphone non renseigné.',
@@ -68,23 +68,23 @@ class GarantyController extends Controller
                 'description' => $description,
             ]);
 
-            if ($method == "cash") {
+            if ($method == 'cash') {
 
-                DB::transaction(function () use ($payment, $method) {
+                DB::transaction(function () use ($payment) {
                     $garanty = Garanty::firstOrCreate(
                         [
-                            'ramasseur_id' => $payment->user_id
+                            'ramasseur_id' => $payment->user_id,
                         ],
                         [
                             'montant' => 0,
                             'reste' => 0,
-                            'currency' => $payment->currency
+                            'currency' => $payment->currency,
                         ]
                     );
 
                     $payment->update([
                         'status' => 'success',
-                        'garanty_id' => $garanty->id
+                        'garanty_id' => $garanty->id,
                     ]);
 
                     $amountPaid = $payment->montant;
@@ -101,9 +101,9 @@ class GarantyController extends Controller
                 });
 
                 return response()->json([
-                    'code' => "0",
+                    'code' => '0',
                     'success' => true,
-                    'message' => "Paiement cash effectué avec succès",
+                    'message' => 'Paiement cash effectué avec succès',
                     'order_number' => null,
                 ], 200);
             }
@@ -114,7 +114,7 @@ class GarantyController extends Controller
                 $validation['phone'],
                 $validation['currency'],
                 $description,
-                route('api.garanty.callback')
+                route('api.garanty.callback', ['reference' => $reference])
             );
 
             $payment->update([
@@ -123,16 +123,17 @@ class GarantyController extends Controller
 
             return response()->json([
                 'code' => $response['code'],
-                'success' => (string) $response['code'] === "0",
+                'success' => (string) $response['code'] === '0',
                 'message' => $response['message'] ?? 'Paiement de garantie initié avec succès.',
                 'order_number' => $response['orderNumber'] ?? null,
             ], 200);
         } catch (\Exception $e) {
 
-            Log::error('Erreur lors de l\'initiation du paiement de garantie : ' . $e->getMessage(), [
+            Log::error('Erreur lors de l\'initiation du paiement de garantie : '.$e->getMessage(), [
                 'user_id' => $request->user()->id ?? null,
                 'request_data' => $request->all(),
             ]);
+
             return response()->json([
                 'code' => '1',
                 'message' => 'Une erreur est survenue lors de l\'initiation du paiement de garantie.',
@@ -141,14 +142,23 @@ class GarantyController extends Controller
         }
     }
 
-    public function callback(Request $request, FlexpaieService $flexpaieService)
+    public function callback(Request $request, FlexpaieService $flexpaieService, string $reference)
     {
         try {
-            $reference = $request->input('reference');
-            if (!is_string($reference) || $reference === '') {
+            $content = $request->json()->all();
+            $callbackCode = $content['code'] ?? null;
+            $callbackStatus = $content['status'] ?? null;
+
+            if ((string) $callbackCode !== '0' || ! in_array((string) $callbackStatus, ['0', '1', '2', '4'], true)) {
+                Log::warning('Données de callback invalides pour un paiement de garantie.', [
+                    'reference' => $reference,
+                    'code' => $callbackCode,
+                    'status' => $callbackStatus,
+                ]);
+
                 return response()->json([
                     'success' => false,
-                    'message' => 'Référence de paiement manquante.',
+                    'message' => 'Code ou statut de callback invalide.',
                 ], 422);
             }
 
@@ -157,15 +167,16 @@ class GarantyController extends Controller
                 ->where('type', 'garanty')
                 ->first();
 
-            if (!$payment) {
+            if (! $payment) {
                 Log::warning('Callback de paiement de garantie introuvable.', ['reference' => $reference]);
+
                 return response()->json([
                     'success' => false,
                     'message' => 'Paiement introuvable.',
                 ], 404);
             }
 
-            if (!$payment->order_number) {
+            if (! $payment->order_number) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Le numéro de commande du paiement n’est pas encore disponible.',
@@ -177,24 +188,31 @@ class GarantyController extends Controller
                 Log::warning('Vérification FlexPay échouée pour le callback de garantie.', [
                     'reference' => $reference,
                 ]);
+
                 return response()->json([
                     'success' => false,
                     'message' => 'Impossible de vérifier le paiement auprès de FlexPay.',
                 ], 502);
             }
 
-            $flexStatus = $response['transaction']['status'] ?? null;
-            if ($flexStatus === null) {
+            $verifiedStatus = $response['transaction']['status'] ?? null;
+            if ($verifiedStatus === null || (string) $verifiedStatus !== (string) $callbackStatus) {
+                Log::warning('Le statut du callback ne correspond pas au statut vérifié par FlexPay.', [
+                    'reference' => $reference,
+                    'callback_status' => $callbackStatus,
+                    'verified_status' => $verifiedStatus,
+                ]);
+
                 return response()->json([
                     'success' => false,
-                    'message' => 'Statut FlexPay manquant.',
-                ], 502);
+                    'message' => 'Le statut du callback ne correspond pas au statut vérifié par FlexPay.',
+                ], 409);
             }
 
-            $this->closeGarantyPayment($payment, $flexStatus);
+            $this->closeGarantyPayment($payment, $verifiedStatus);
             Log::info('Callback de paiement de garantie traité.', [
                 'reference' => $reference,
-                'status' => $flexStatus,
+                'status' => $verifiedStatus,
             ]);
 
             return response()->json([
@@ -204,6 +222,7 @@ class GarantyController extends Controller
             Log::error('Erreur lors du callback de paiement de garantie.', [
                 'exception' => $e,
             ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Une erreur est survenue lors du traitement du callback.',
@@ -228,7 +247,7 @@ class GarantyController extends Controller
                 ->where('type', 'garanty')
                 ->first();
 
-            if (!$payment) {
+            if (! $payment) {
                 return response()->json([
                     'code' => '1',
                     'success' => false,
@@ -241,7 +260,7 @@ class GarantyController extends Controller
                 return response()->json([
                     'code' => '1',
                     'success' => false,
-                    'message' => $response['message'] ?? 'Une erreur est survenue lors de la vérification du paiement.'
+                    'message' => $response['message'] ?? 'Une erreur est survenue lors de la vérification du paiement.',
                 ], 502);
             }
 
@@ -267,6 +286,7 @@ class GarantyController extends Controller
                 'user_id' => $user->id,
                 'exception' => $e,
             ]);
+
             return response()->json([
                 'code' => '1',
                 'success' => false,
@@ -277,11 +297,12 @@ class GarantyController extends Controller
 
     private function closeGarantyPayment(Payment $payment, mixed $flexStatus): ?string
     {
-        if (!is_int($flexStatus) && !is_string($flexStatus)) {
+        if (! is_int($flexStatus) && ! is_string($flexStatus)) {
             Log::warning('Statut FlexPay invalide pour un paiement de garantie.', [
                 'order_number' => $payment->order_number,
                 'status' => $flexStatus,
             ]);
+
             return $payment->status;
         }
 
@@ -289,7 +310,7 @@ class GarantyController extends Controller
             '0' => 'success',
             '1' => 'failed',
             '2' => 'pending',
-            '4' => 'cancelled',
+            '4' => 'failed',
             default => null,
         };
 
@@ -298,6 +319,7 @@ class GarantyController extends Controller
                 'order_number' => $payment->order_number,
                 'status' => $flexStatus,
             ]);
+
             return $payment->status;
         }
 
