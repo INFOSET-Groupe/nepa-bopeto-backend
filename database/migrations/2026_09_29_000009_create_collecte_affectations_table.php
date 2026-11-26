@@ -15,6 +15,8 @@ return new class extends Migration
             $table->enum('statut', ['en_attente', 'acceptee', 'annulee', 'cloturee', 'terminee'])->default('en_attente');
             $table->timestamp('notifie_at')->nullable();
             $table->timestamp('repondu_at')->nullable();
+            $table->timestamp('annulee_at')->nullable();
+            $table->text('motif_annulation')->nullable();
             $table->timestamps();
             $table->unique(['collecte_id', 'ramasseur_id']);
         });

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Collecte;
+use App\Models\Garanty;
 use App\Models\TaillePoubelle;
 use App\Models\User;
 use App\Models\UserNotification;
@@ -34,7 +35,7 @@ class CollecteController extends Controller
 
     public function store(Request $request)
     {
-        //abort_unless($request->user()->isMenage(), 403);
+        abort_unless($request->user()->isMenage(), 403, 'Seule un profil menage peut créer une commande');
         $data = $request->validate([
             'tailles_poubelles' => ['required', 'array', 'min:1'],
             'tailles_poubelles.*.taille_poubelle_id' => ['required', 'integer', 'distinct', 'exists:tailles_poubelles,id'],
@@ -115,6 +116,7 @@ class CollecteController extends Controller
                 $collecte->taillesPoubelles()->detach();
                 $collecte->update([
                     'dechets_tries' => $data['dechets_tries'] ?? false,
+                    'montant' => $data['montant']
                 ]);
                 foreach ($data['tailles_poubelles'] as $taille) {
                     $collecte->taillesPoubelles()->attach($taille['taille_poubelle_id'], ['qte' => $taille['qte'], 'type_dechet' => $taille['type_dechet']]);
@@ -139,18 +141,16 @@ class CollecteController extends Controller
 
     public function ranningToggle(Request $request, Collecte $collecte)
     {
-        // abort_unless($request->user()->isRamasseur() && $collecte->ramasseur_id === $request->user()->id, 403, 'Seul le ramasseur affecté ');
-
         try {
 
-            $collecte->update(['pluie' => true]);
+            $collecte->update(['pluie' => ! $collecte->pluie]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Mode de pluie mis à jour avec succès.',
             ]);
         } catch (\Throwable $exception) {
-            Log::error("Erreur lors d'activation mode pulie.", [
+            Log::error("Erreur lors de la modification du mode pluie.", [
                 'collecte_id' => $collecte->id,
                 'user_id' => $request->user()->id,
                 'exception' => $exception,
@@ -174,6 +174,30 @@ class CollecteController extends Controller
             ]);
         } catch (\Throwable $exception) {
             Log::error('Erreur lors de la récupération des collectes du ménage.', [
+                'user_id' => $request->user()->id,
+                'exception' => $exception,
+            ]);
+
+            throw $exception;
+        }
+    }
+
+
+    public function indexRamasseur(Request $request)
+    {
+        abort_unless($request->user()->isRamasseur(), 403);
+        try {
+            $query = $request->user()->affectations()->with(['collecte', 'collecte.taillesPoubelles', 'collecte.menage']);
+            if ($request->filled('statut')) {
+                $query->where('statut', $request->string('statut'));
+            }
+
+            return response()->json([
+                'success' => true,
+                'collectes' => $query->latest()->get()
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Erreur lors de la récupération des collectes du menage.', [
                 'user_id' => $request->user()->id,
                 'exception' => $exception,
             ]);
@@ -306,9 +330,36 @@ class CollecteController extends Controller
             DB::transaction(function () use ($collecte, $ramasseur) {
                 $collecte = Collecte::whereKey($collecte->id)->lockForUpdate()->firstOrFail();
                 abort_unless($collecte->statut === 'en_attente', 409, 'Cette demande a déjà été prise en charge.');
+
+                $garanty = Garanty::query()
+                    ->where('ramasseur_id', $ramasseur->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                abort_unless($garanty && $garanty->currency === 'CDF', 409, 'Une garantie en CDF est requise pour accepter cette collecte.');
+
+                abort_unless(
+                    !Collecte::query()
+                        ->where('ramasseur_id', $ramasseur->id)
+                        ->where('statut', 'acceptee')
+                        ->exists(),
+                    409,
+                    'Vous avez déjà une collecte en cours. Terminez-la avant d’en accepter une nouvelle.'
+                );
+
+                $requiredGuarantee = round((float) $collecte->montant * 0.30, 2);
+                abort_unless(
+                    round((float) $garanty->reste, 2) >= $requiredGuarantee,
+                    409,
+                    'La garantie disponible doit couvrir au moins 30 % du montant de cette collecte.'
+                );
+
                 $collecte->affectations()->updateOrCreate(
                     ['ramasseur_id' => $ramasseur->id],
-                    ['statut' => 'acceptee', 'repondu_at' => now()]
+                    [
+                        'statut' => 'acceptee',
+                        'repondu_at' => now()
+                    ]
                 );
                 $collecte->update([
                     'ramasseur_id' => $ramasseur->id,
@@ -350,9 +401,13 @@ class CollecteController extends Controller
                     'statut' => 'annulee',
                     'annulee_at' => now(),
                     'ramasseur_id' => null,
+                    'pluie' => false
                 ]);
+
                 $collecte->affectations()->where('statut', 'acceptee')->update([
-                    'statut' => 'annulee'
+                    'statut' => 'annulee',
+                    'annulee_at' => now(),
+                    'motif_annulation' => "Annulée par le client"
                 ]);
             });
 
@@ -382,17 +437,23 @@ class CollecteController extends Controller
                 $collecte = Collecte::whereKey($collecte->id)->lockForUpdate()->firstOrFail();
                 abort_unless($collecte->ramasseur_id === $ramasseur->id,409,'Seul le ramasseur affecté peut annuler cette collecte.');
                 abort_unless($collecte->statut === 'acceptee',409,'Cette collecte ne peut pas être annulée.');
+
                 $affectation = $collecte->affectations()
                     ->where('ramasseur_id', $ramasseur->id)
                     ->where('statut', 'acceptee')
                     ->firstOrFail();
-                $affectation->update(['statut' => 'annulee', 'repondu_at' => now()]);
+
+                $affectation->update([
+                    'statut' => 'annulee',
+                    'annulee_at' => now(),
+                    'motif_annulation' => $data['motif_annulation'],
+                ]);
+
                 $collecte->update([
                     'statut' => 'en_attente',
-                    'annulee_at' => now(),
                     'acceptee_at' => null,
                     'ramasseur_id' => null,
-                    'motif_annulation' => $data['motif_annulation'],
+                    'pluie' => false
                 ]);
             });
 

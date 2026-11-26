@@ -18,7 +18,8 @@ return new class extends Migration
             $table->enum('type', [
                 'garanty',
                 'collecte',
-                'other'
+                'commission',
+                'other',
             ])->nullable();
 
             $table->enum('status', [

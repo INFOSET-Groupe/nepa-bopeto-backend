@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Collecte;
+use App\Models\Garanty;
 use App\Models\Payment;
 use App\Services\FlexpaieService;
 use Illuminate\Http\Request;
@@ -12,51 +13,128 @@ use Illuminate\Support\Facades\Log;
 
 class PaymentController extends Controller
 {
+    public function index(Request $request)
+    {
+        $user = $request->user();
+        // abort_unless($request->user()->isMenage(), 403, 'Seule un profil ménage peut récupérer son historique de paiements');
+
+        $payments = Payment::where('user_id', $user->id)
+            ->where('type', 'collecte')
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        return response()->json($payments);
+    }
 
     public function initiate(Request $request, FlexpaieService $flexpaieService)
     {
+        $user = $request->user();
+        abort_unless($user->isMenage(), 403, 'Seul un profil ménage peut payer une collecte.');
+
+        $validation = $request->validate([
+            'collecte_id' => ['required', 'exists:collectes,id'],
+            'montant' => ['required', 'numeric', 'min:5000'],
+            'currency' => ['required', 'string', 'in:CDF'],
+            'phone' => ['nullable', 'string', 'size:12', 'required_if:methode,mobile'],
+            'methode' => ['required', 'string', 'in:cash,mobile'],
+            'temps_attente' => ['nullable', 'string'],
+        ]);
+
         try {
+            $collecte = Collecte::query()
+                ->whereKey($validation['collecte_id'])
+                ->where('menage_id', $user->id)
+                ->first();
 
-            $user = $request->user();
-
-            $validation = $request->validate([
-                'collecte_id' => ['required', 'exists:collectes,id'],
-                'montant' => 'required|numeric|min:5000',
-                'currency' => 'required|string|in:CDF,USD',
-                'phone' => 'required|string|size:12',
-                'temps_attente' => 'nullable|string',
-            ]);
-
-            $collecte = Collecte::find($validation['collecte_id']);
-
-            if (!$collecte) {
+            if (! $collecte) {
                 return response()->json([
                     'code' => '1',
                     'success' => false,
-                    'message' => 'Erreur : Collecte non retrouvée !',
+                    'message' => 'Collecte non retrouvée.',
+                ], 404);
+            }
+
+            if (! $collecte->ramasseur_id) {
+                return response()->json([
+                    'code' => '1',
+                    'success' => false,
+                    'message' => 'Aucun ramasseur n’est associé à cette collecte.',
                 ], 409);
             }
 
-            $collecte->update([
-                'temps_attente' => $validation['temps_attente']
-            ]);
+            $reference = 'PCOL-'.strtoupper(uniqid());
+            $description = 'Paiement de la collecte de '.$user->name;
+            $method = $validation['methode'];
 
-            $reference = 'PCOL-' . strtoupper(uniqid());
-            $description = 'Paiement de la collecte de ' . $user->name;
-
-            $payment = Payment::create([
+            $paymentAttributes = [
                 'user_id' => $user->id,
                 'type' => 'collecte',
                 'montant' => $validation['montant'],
-                'currency' => $validation['currency'] ?? 'CDF',
-                'phone' => $validation['phone'],
+                'currency' => $validation['currency'],
+                'phone' => $validation['phone'] ?? null,
                 'collecte_id' => $collecte->id,
                 'reference' => $reference,
                 'status' => 'pending',
+                'method' => $method,
                 'description' => $description,
-            ]);
+            ];
 
-            $response = $flexpaieService->mobilePayment(
+            if ($method === 'cash') {
+                DB::transaction(function () use ($collecte, $paymentAttributes, $validation) {
+                    $lockedCollecte = Collecte::query()
+                        ->whereKey($collecte->id)
+                        ->lockForUpdate()
+                        ->firstOrFail();
+
+                    abort_unless(
+                        ! $this->hasActiveCollectePayment($lockedCollecte),
+                        409,
+                        'Un paiement est déjà en cours ou a déjà été effectué pour cette collecte.'
+                    );
+
+                    $payment = Payment::create(array_merge($paymentAttributes, [
+                        'status' => 'success',
+                    ]));
+
+                    $this->deductCollecteGuarantee($lockedCollecte, $payment);
+
+                    $lockedCollecte->update([
+                        'temps_attente' => $validation['temps_attente'] ?? null,
+                        'statut' => 'terminee',
+                        'terminee_at' => now(),
+                    ]);
+
+                    return $payment;
+                });
+
+                return response()->json([
+                    'code' => '0',
+                    'success' => true,
+                    'message' => 'Paiement cash effectué avec succès.',
+                    'order_number' => null,
+                ]);
+            }
+
+            $payment = DB::transaction(function () use ($collecte, $paymentAttributes, $validation) {
+                $lockedCollecte = Collecte::query()
+                    ->whereKey($collecte->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                abort_unless(
+                    ! $this->hasActiveCollectePayment($lockedCollecte),
+                    409,
+                    'Un paiement est déjà en cours ou a déjà été effectué pour cette collecte.'
+                );
+
+                $lockedCollecte->update([
+                    'temps_attente' => $validation['temps_attente'] ?? null,
+                ]);
+
+                return Payment::create($paymentAttributes);
+            });
+
+            $response = $flexpaieService->mobilePaymentMerchant(
                 $reference,
                 $validation['montant'],
                 $validation['phone'],
@@ -65,153 +143,266 @@ class PaymentController extends Controller
                 route('api.collecte.callback')
             );
 
+            $initiated = (string) ($response['code'] ?? '1') === '0';
             $payment->update([
                 'order_number' => $response['orderNumber'] ?? null,
+                'status' => $initiated ? 'pending' : 'failed',
             ]);
 
             return response()->json([
-                'code' => $response['code'],
-                'success' => (string) $response['code'] === "0",
+                'code' => $response['code'] ?? '1',
+                'success' => $initiated,
                 'message' => $response['message'] ?? 'Paiement de la collecte initié avec succès.',
                 'order_number' => $response['orderNumber'] ?? null,
-            ], 200);
-        } catch (\Exception $e) {
-
-            Log::error('Erreur lors de l\'initiation du paiement de le collecte : ' . $e->getMessage(), [
-                'user_id' => $request->user()->id ?? null,
-                'request_data' => $request->all(),
             ]);
+        } catch (\Throwable $e) {
+            Log::error('Erreur lors de l’initiation du paiement de la collecte.', [
+                'user_id' => $user->id,
+                'collecte_id' => $validation['collecte_id'],
+                'exception' => $e,
+            ]);
+
             return response()->json([
                 'code' => '1',
-                'message' => 'Une erreur est survenue lors de l\'initiation du paiement de le collecte.',
-                'error' => $e->getMessage(),
+                'success' => false,
+                'message' => 'Une erreur est survenue lors de l’initiation du paiement de la collecte.',
             ], 500);
         }
     }
 
-    public function callback(Request $request, $reference)
+    public function callback(Request $request, FlexpaieService $flexpaieService)
     {
         try {
+            $reference = $request->input('reference');
+            if (! is_string($reference) || $reference === '') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Référence de paiement manquante.',
+                ], 422);
+            }
 
-            $content = json_decode($request->getContent(), true);
-            $payment = Payment::where('reference', $reference)->first();
-            $flexStatus = $content['status'] ?? 2;
+            $payment = Payment::query()
+                ->where('reference', $reference)
+                ->where('type', 'collecte')
+                ->first();
 
-            if (!$payment) {
-                Log::warning("Payment introuvable : $reference");
+            if (! $payment) {
+                Log::warning('Callback de paiement de collecte introuvable.', ['reference' => $reference]);
 
                 return response()->json([
                     'success' => false,
-                    'message' => 'Payment introuvable.'
+                    'message' => 'Paiement introuvable.',
                 ], 404);
             }
 
-            if ($payment) {
-                $this->closeCollectePayment($payment, $flexStatus, $content);
+            if (! $payment->order_number) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Le numéro de commande du paiement n’est pas encore disponible.',
+                ], 409);
             }
 
-            Log::error('Callback received: ' . $reference . ' - ' . json_encode($request->all()));
+            $response = $flexpaieService->getPaymentStatus($payment->order_number);
+            if ((string) ($response['code'] ?? '') !== '0') {
+                Log::warning('Vérification FlexPay échouée pour le callback de collecte.', [
+                    'reference' => $reference,
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Impossible de vérifier le paiement auprès de FlexPay.',
+                ], 502);
+            }
+
+            $flexStatus = $response['transaction']['status'] ?? null;
+            if ($flexStatus === null) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Statut FlexPay manquant.',
+                ], 502);
+            }
+
+            $this->closeCollectePayment($payment, $flexStatus);
+            Log::info('Callback de paiement de collecte traité.', [
+                'reference' => $reference,
+                'status' => $flexStatus,
+            ]);
+
             return response()->json([
-                'success' => true
+                'success' => true,
             ]);
         } catch (\Throwable $e) {
-            Log::error('Callback error: ' . $e->getMessage());
+            Log::error('Erreur lors du callback de paiement de collecte.', [
+                'exception' => $e,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Une erreur est survenue lors du traitement du callback.',
+            ], 500);
         }
     }
 
     public function check(Request $request, FlexpaieService $flexpaieService)
     {
+        $user = $request->user();
+        abort_unless($user->isMenage(), 403, 'Seul un profil ménage peut vérifier un paiement de collecte.');
+
+        $validation = $request->validate([
+            'order_number' => ['required', 'string'],
+        ]);
+
         try {
-            $validation = $request->validate([
-                'order_number' => 'required|string',
-            ]);
+            $orderNumber = $validation['order_number'];
+            $payment = Payment::query()
+                ->where('order_number', $orderNumber)
+                ->where('user_id', $user->id)
+                ->where('type', 'collecte')
+                ->first();
 
-            $order_number = $validation['order_number'];
-            $payment = Payment::where('order_number', $order_number)->first();
-
-            if (!$payment) {
+            if (! $payment) {
                 return response()->json([
                     'code' => '1',
                     'success' => false,
-                    'message' => 'Payment introuvable.'
+                    'message' => 'Paiement introuvable.',
                 ], 404);
             }
 
-            $response = $flexpaieService->getPaymentStatus($order_number);
-            $flexStatus = $response['transaction']['status'] ?? 2;
-
-            if ((string) $response['code'] != "0") {
+            $response = $flexpaieService->getPaymentStatus($orderNumber);
+            if ((string) ($response['code'] ?? '') !== '0') {
                 return response()->json([
-                    'code' => "1",
+                    'code' => '1',
                     'success' => false,
-                    'message' => $response['message'] ?? 'Une erreur est survenue lors de la vérification du paiement.'
-                ], 404);
+                    'message' => $response['message'] ?? 'Une erreur est survenue lors de la vérification du paiement.',
+                ], 502);
             }
 
+            $flexStatus = $response['transaction']['status'] ?? null;
+            if ($flexStatus === null) {
+                return response()->json([
+                    'code' => '1',
+                    'success' => false,
+                    'message' => 'Statut FlexPay manquant.',
+                ], 502);
+            }
 
-            $this->closeCollectePayment($payment, $flexStatus, $response);
+            $paymentStatus = $this->closeCollectePayment($payment, $flexStatus);
 
             return response()->json([
                 'code' => $flexStatus,
                 'success' => true,
+                'payment_status' => $paymentStatus,
                 'message' => $response['message'] ?? 'Statut du paiement récupéré avec succès.',
             ]);
         } catch (\Throwable $e) {
-            Log::error('Check payment error: ' . $e->getMessage());
+            Log::error('Erreur lors de la vérification du paiement de collecte.', [
+                'user_id' => $user->id,
+                'exception' => $e,
+            ]);
+
             return response()->json([
                 'code' => '1',
                 'success' => false,
-                'message' => 'Une erreur est survenue lors de la vérification du paiement.'
+                'message' => 'Une erreur est survenue lors de la vérification du paiement.',
             ], 500);
         }
     }
 
-    private function closeCollectePayment(Payment $payment, string $flexStatus, $content = null)
+    private function closeCollectePayment(Payment $payment, mixed $flexStatus): ?string
     {
-        switch ($flexStatus) {
-            case 0:
-                if ($payment->status === 'success') {
-                    break;
+        if (! is_int($flexStatus) && ! is_string($flexStatus)) {
+            Log::warning('Statut FlexPay invalide pour un paiement de collecte.', [
+                'order_number' => $payment->order_number,
+                'status' => $flexStatus,
+            ]);
+
+            return $payment->status;
+        }
+
+        $newStatus = match ((string) $flexStatus) {
+            '0' => 'success',
+            '1' => 'failed',
+            '2' => 'pending',
+            '4' => 'cancelled',
+            default => null,
+        };
+
+        if ($newStatus === null) {
+            Log::warning('Statut FlexPay inconnu pour un paiement de collecte.', [
+                'order_number' => $payment->order_number,
+                'status' => $flexStatus,
+            ]);
+
+            return $payment->status;
+        }
+
+        return DB::transaction(function () use ($payment, $newStatus) {
+            $lockedPayment = Payment::query()
+                ->lockForUpdate()
+                ->findOrFail($payment->id);
+
+            if ($lockedPayment->status !== 'pending') {
+                return $lockedPayment->status;
+            }
+
+            if ($newStatus === 'success') {
+                $collecte = Collecte::query()
+                    ->lockForUpdate()
+                    ->find($lockedPayment->collecte_id);
+
+                if (! $collecte) {
+                    throw new \RuntimeException('Collecte associée au paiement introuvable.');
                 }
 
-                DB::transaction(function () use ($payment) {
-                    $payment->update([
-                        'status' => 'success'
-                    ]);
+                $this->deductCollecteGuarantee($collecte, $lockedPayment);
 
-                    $collecteId = $payment->id;
-                    $collecte = Collecte::find($collecteId);
+                $collecte->update([
+                    'statut' => 'terminee',
+                    'terminee_at' => now(),
+                ]);
+            }
 
-                    $collecte->updated([
-                        'statut' => 'terminee',
-                        'terminee_at' => now()
-                    ]);
-                });
+            $lockedPayment->update(['status' => $newStatus]);
 
-                break;
-            case 1:
-                $payment->update([
-                    'status' => 'failed'
-                ]);
-                break;
-            case 2:
-                $payment->update([
-                    'status' => 'pending'
-                ]);
-                break;
-            case 4:
-                $payment->update([
-                    'status' => 'cancelled'
-                ]);
-                break;
-            default:
-                logger()->warning('Statut FlexPay inconnu', [
-                    'order_number' => $payment->order_number,
-                    'status' => $flexStatus,
-                    'response' => $content,
-                ]);
-                break;
-        }
+            return $newStatus;
+        });
     }
 
+    private function deductCollecteGuarantee(Collecte $collecte, Payment $payment): void
+    {
+        if (! $collecte->ramasseur_id || $payment->currency !== 'CDF') {
+            throw new \RuntimeException('La collecte ou le paiement ne permet pas de débiter la garantie.');
+        }
+
+        $garanty = Garanty::query()
+            ->where('ramasseur_id', $collecte->ramasseur_id)
+            ->lockForUpdate()
+            ->first();
+
+        if (! $garanty || $garanty->currency !== 'CDF') {
+            throw new \RuntimeException('Garantie CDF du ramasseur introuvable.');
+        }
+
+        $deduction = round((float) $payment->montant * 0.20, 2);
+        $garanty->decrement('reste', $deduction);
+
+        Payment::create([
+            'montant' => $deduction,
+            'currency' => $payment->currency,
+            'type' => 'commission',
+            'status' => 'success',
+            'user_id' => $collecte->ramasseur_id,
+            'garanty_id' => $garanty->id,
+            'collecte_id' => $collecte->id,
+        ]);
+    }
+
+    private function hasActiveCollectePayment(Collecte $collecte): bool
+    {
+        return Payment::query()
+            ->where('collecte_id', $collecte->id)
+            ->where('type', 'collecte')
+            ->whereIn('status', ['pending', 'success'])
+            ->exists();
+    }
 }

@@ -15,6 +15,7 @@ class Payment extends Model
         'montant',
         'currency',
         'status',
+        'method',
         'phone',
         'reference',
         'order_number',

@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Collecte;
+use App\Models\Garanty;
 use App\Models\TaillePoubelle;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -65,10 +66,11 @@ test('une collecte n’enregistre que le ramasseur qui accepte', function () {
     $tailleGrande = TaillePoubelle::create(['nom' => 'Grande', 'capacite' => 120, 'unite' => 'L']);
     $this->actingAs($menageUser, 'sanctum')->postJson('/api/collectes', [
         'tailles_poubelles' => [
-            ['taille_poubelle_id' => $tailleMoyenne->id, 'qte' => 2],
-            ['taille_poubelle_id' => $tailleGrande->id, 'qte' => 1],
+            ['taille_poubelle_id' => $tailleMoyenne->id, 'qte' => 2, 'type_dechet' => 'compostable'],
+            ['taille_poubelle_id' => $tailleGrande->id, 'qte' => 1, 'type_dechet' => 'compostable'],
         ],
         'type_dechet' => 'compostable',
+        'montant' => 10000,
         'adresse' => 'Kinshasa',
         'latitude' => 0,
         'longitude' => 0,
@@ -92,6 +94,13 @@ test('une collecte n’enregistre que le ramasseur qui accepte', function () {
         ->getJson('/api/menage/collectes')
         ->assertOk()
         ->assertJsonFragment(['menage_id' => $menageUser->id]);
+
+    Garanty::create([
+        'ramasseur_id' => $ramasseurUser->id,
+        'montant' => 10000,
+        'reste' => 10000,
+        'currency' => 'CDF',
+    ]);
 
     $this->actingAs($ramasseurUser, 'sanctum')
         ->postJson("/api/collectes/{$collecte->id}/accepter")
@@ -137,12 +146,25 @@ test('le ramasseur annule son affectation et le menage peut ensuite annuler la c
         'tailles_poubelles' => [
             ['taille_poubelle_id' => $taille->id, 'qte' => 1, 'type_dechet' => 'compostable'],
         ],
+        'montant' => 10000,
         'adresse' => 'Kinshasa',
         'latitude' => 0,
         'longitude' => 0,
     ])->assertCreated();
 
     $collecte = Collecte::firstOrFail();
+    Garanty::create([
+        'ramasseur_id' => $ramasseurUser->id,
+        'montant' => 10000,
+        'reste' => 10000,
+        'currency' => 'CDF',
+    ]);
+    Garanty::create([
+        'ramasseur_id' => $secondRamasseur->id,
+        'montant' => 10000,
+        'reste' => 10000,
+        'currency' => 'CDF',
+    ]);
 
     $this->actingAs($ramasseurUser, 'sanctum')
         ->postJson("/api/collectes/{$collecte->id}/accepter")
