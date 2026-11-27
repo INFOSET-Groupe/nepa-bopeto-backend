@@ -20,7 +20,7 @@ class GarantyController extends Controller
         $garanty = $user->garanty()->first();
 
         $last_payment = Payment::where('user_id', $user->id)
-            ->where('type', 'garanty')->where('type', 'commission')
+            ->whereIn('type', ['garanty', 'commission'])
             ->orderBy('created_at', 'desc')
             ->get();
 
